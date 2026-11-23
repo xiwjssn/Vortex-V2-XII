@@ -16,7 +16,7 @@ module.exports = {
       const icon = ICONS[command.name] || '✦';
       return icon + '  ' + event.config.prefix + command.name + '\n' +
         '   ↳ ' + command.description;
-    }).join('\\n\\n');
+    }).join('\n\n');
 
     const message = [
       '╭─「 📚 دليل الأوامر 」',
@@ -25,7 +25,7 @@ module.exports = {
       '├────────────────',
       list || '📭 لا توجد أوامر متاحة حاليًا.',
       '╰─「 ⟡ VORTEX 」'
-    ].join('\\n');
+    ].join('\n');
 
     return api.sendMessage(message, event.threadID, event.messageID);
   }
