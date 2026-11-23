@@ -5,7 +5,7 @@ A Node.js Messenger bot scaffold with a protected Express dashboard, command mod
 > **Important:** Messenger automation depends on Meta/Messenger behavior and the exact installed `@dongdev/fca-unofficial` API. This project does not bypass platform restrictions. Real login has not been verified without a valid user-provided AppState and an available network connection.
 
 ## Requirements
-- Node.js 22.x (the package engine permits Node 20–22)
+- Node.js 22.x recommended (the package engine supports Node.js 20 through 24)
 - npm 10+
 - A valid AppState supplied by the account owner
 
