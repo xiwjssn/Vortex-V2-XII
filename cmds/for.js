@@ -60,7 +60,9 @@ function startGuard(api, file) {
         if (!record || typeof record.name !== 'string' || !Array.isArray(record.members)) continue;
         try {
           const info = await apiCall(state.api, 'getThreadInfo', threadID);
-          const nicknames = info && info.nicknames && typeof info.nicknames === 'object' ? info.nicknames : {};
+          const nicknames = info && info.nicknames && typeof info.nicknames === 'object' ? info.nicknames : null;
+          // Do not assume all members changed if FCA omits nickname data.
+          if (!nicknames) continue;
           for (const memberID of record.members) {
             if (String(nicknames[memberID] || '') === record.name) continue;
             try {
