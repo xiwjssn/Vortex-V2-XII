@@ -66,7 +66,7 @@ function startGuard(api, file) {
           for (const memberID of record.members) {
             if (String(nicknames[memberID] || '') === record.name) continue;
             try {
-              await apiCall(state.api, 'changeNickname', record.name, String(memberID), String(threadID));
+              await apiCall(state.api, 'changeNickname', record.name, String(threadID), String(memberID));
               await sleep(CHANGE_DELAY_MS);
             } catch (error) {
               console.warn('[for] Nickname restore failed:', String(error.message || error).slice(0, 160));
@@ -111,7 +111,11 @@ module.exports = {
     }
 
     const target = input;
-    const info = await apiCall(api, 'getThreadInfo', threadID);
+    let info;
+    try { info = await apiCall(api, 'getThreadInfo', threadID); }
+    catch (error) {
+      return api.sendMessage('❌ فشل جلب أعضاء المجموعة: ' + String(error.message || error).slice(0, 180), threadID, event.messageID);
+    }
     const ids = Array.isArray(info?.participantIDs) ? info.participantIDs.map(String) : [];
     const botID = typeof api.getCurrentUserID === 'function' ? String(api.getCurrentUserID()) : '';
     const members = [...new Set(ids)].filter(id => id && id !== botID);
@@ -128,7 +132,7 @@ module.exports = {
       // Keep each member action separated to avoid a burst of account requests.
       await sleep(CHANGE_DELAY_MS);
       try {
-        await apiCall(api, 'changeNickname', target, memberID, threadID);
+        await apiCall(api, 'changeNickname', target, threadID, memberID);
         changed++;
       } catch (error) {
         console.warn('[for] Nickname update failed:', String(error.message || error).slice(0, 160));
