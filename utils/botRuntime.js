@@ -3,9 +3,7 @@ const path = require('node:path');
 const { loadCommands } = require('./commandLoader');
 const { validateAppState } = require('./appState');
 const { atomicWrite } = require('./atomicFile');
-const { ReconnectManager } = require('./reconnect');
 const { AppStateRefreshManager } = require('./appStateRefresh');
-const { NicknameGuard } = require('./nicknameGuard');
 const { createHumanWriter } = require('./humanWriter');
 const { isAuthorizedSender } = require('./accessControl');
 const { isSessionAuthError } = require('./sessionErrors');
@@ -18,13 +16,11 @@ function createBotRuntime({ config, logger }) {
   let lastError = null;
   let lastConnect = null;
   let lastDisconnect = null;
-  let reconnects = 0;
   let startedAt = Date.now();
   let connecting = false;
   let appStatePresent = false;
   let appState = null;
   let sessionCleared = false;
-  let reconnectManager;
   let appStateRefreshManager;
   let mqttStatus = 'offline';
   let manualDisconnect = false;
@@ -66,14 +62,11 @@ function createBotRuntime({ config, logger }) {
     sessionHealth = 'needs-attention';
     sessionMessage = 'Facebook may have expired this session or requires account verification. Update AppState in the dashboard, then connect again.';
     lastError = sessionMessage;
-    reconnectManager?.stop();
     logger.warn('SESSION_REAUTH_REQUIRED', { reason: 'authentication-or-checkpoint-error' });
   }
-  const nicknameGuard = new NicknameGuard({ getApi: () => api, logger, nickname: '𝚅𝚯⃫𝐑⃕𝚃⃓𝚵𝐗' });
   const humanWriter = createHumanWriter({
     logger, minIntervalMs: 6000, globalIntervalMs: 4000, duplicateWindowMs: 60000, maxPerMinute: 5, circuitPauseMs: 60 * 60 * 1000, maxConsecutiveFailures: 2,
     onSafetyStop: ({ type, reason }) => {
-      clearRepeatingMessages();
       logger.warn('OUTBOUND_AUTOMATION_STOPPED', { type, reason });
       if (type === 'session' && runtime) {
         runtime.disconnected('checkpoint/login required after outbound send error').catch(() => {});
@@ -81,93 +74,13 @@ function createBotRuntime({ config, logger }) {
     }
   });
   const seenCommandMessages = new Map();
-  const repeatingMessages = new Map();
-  function clearRepeatingMessages() {
-    for (const task of repeatingMessages.values()) {
-      clearInterval(task.timer);
-      clearTimeout(task.inactivityTimer);
-    }
-    repeatingMessages.clear();
-  }
-
   const runtime = {
-    startRepeatingMessage({ threadID, senderID, messages, intervalMs, inactivityMs = 16 * 60 * 1000 }) {
-      const thread = String(threadID);
-      if (repeatingMessages.has(thread)) return { started: false, reason: 'already-running' };
-      if (!api || typeof api.sendMessage !== 'function') return { started: false, reason: 'offline' };
-      if (!Array.isArray(messages) || ![1, 2].includes(messages.length) || messages.some(message => !String(message || '').trim()) ||
-          !Number.isFinite(intervalMs) || intervalMs < 15000 || intervalMs > 86400000) {
-        return { started: false, reason: 'invalid-input' };
-      }
-      const task = { senderID: String(senderID), messages: messages.map(String), intervalMs, inactivityMs, busy: false, timer: null, inactivityTimer: null, replied: false };
-      const finishForInactivity = async () => {
-        if (repeatingMessages.get(thread) !== task) return;
-        clearInterval(task.timer);
-        clearTimeout(task.inactivityTimer);
-        repeatingMessages.delete(thread);
-        logger.info('REPEATING_MESSAGE_INACTIVITY_STOPPED', { threadID: thread, inactivityMs });
-        try {
-          if (api && status === 'connected') {
-            await humanWriter.wrap(api).sendMessage('ℹ️ انتهت 16 دقيقة دون رد من أعضاء المحادثة؛ أوقفت التكرار تلقائياً.', thread);
-          }
-        } catch (error) {
-          logger.warn('REPEATING_MESSAGE_NOTICE_FAILED', { threadID: thread, error: String(error?.message || error).slice(0, 160) });
-        }
-      };
-      task.inactivityTimer = setTimeout(finishForInactivity, inactivityMs);
-      task.timer = setInterval(async () => {
-        if (task.busy || !api || status !== 'connected' || repeatingMessages.get(thread) !== task) return;
-        task.busy = true;
-        try {
-          for (const message of task.messages) {
-            await humanWriter.wrap(api).sendMessage(message, thread);
-          }
-        } catch (error) {
-          logger.warn('REPEATING_MESSAGE_FAILED', { threadID: thread, error: String(error?.message || error).slice(0, 160) });
-        } finally {
-          task.busy = false;
-        }
-      }, intervalMs);
-      task.timer.unref?.();
-      task.inactivityTimer.unref?.();
-      repeatingMessages.set(thread, task);
-      logger.info('REPEATING_MESSAGE_STARTED', { threadID: thread, intervalMs, inactivityMs, messageCount: task.messages.length });
-      return { started: true, intervalMs, inactivityMs };
-    },
-    noteRepeatingMessageReply(event) {
-      if (!event?.threadID || !event?.senderID || !String(event.body || '').trim()) return;
-      const task = repeatingMessages.get(String(event.threadID));
-      if (!task || String(event.senderID) === task.senderID) return;
-      clearTimeout(task.inactivityTimer);
-      task.inactivityTimer = setTimeout(async () => {
-        if (repeatingMessages.get(String(event.threadID)) !== task) return;
-        clearInterval(task.timer);
-        repeatingMessages.delete(String(event.threadID));
-        logger.info('REPEATING_MESSAGE_INACTIVITY_STOPPED', { threadID: String(event.threadID), inactivityMs: task.inactivityMs });
-        try {
-          if (api && status === 'connected') await humanWriter.wrap(api).sendMessage('ℹ️ مرّت 16 دقيقة دون رد جديد؛ أوقفت التكرار تلقائياً.', String(event.threadID));
-        } catch (error) {
-          logger.warn('REPEATING_MESSAGE_NOTICE_FAILED', { threadID: String(event.threadID), error: String(error?.message || error).slice(0, 160) });
-        }
-      }, task.inactivityMs);
-      task.inactivityTimer.unref?.();
-    },
-    stopRepeatingMessage(threadID) {
-      const thread = String(threadID);
-      const task = repeatingMessages.get(thread);
-      if (!task) return { stopped: false, reason: 'not-running' };
-      clearInterval(task.timer);
-      clearTimeout(task.inactivityTimer);
-      repeatingMessages.delete(thread);
-      logger.info('REPEATING_MESSAGE_STOPPED', { threadID: thread });
-      return { stopped: true };
-    },
     getState() {
       return {
         bot: config.botName, prefix: config.prefix, status, fcaStatus: status, mqttStatus,
         connected: status === 'connected', uptimeMs: Date.now() - startedAt,
         sessionHealth, sessionMessage, requiresSessionUpdate,
-        commands: loaded.unique.length, reconnectAttempts: reconnects,
+        commands: loaded.unique.length,
         lastConnection: lastConnect, lastDisconnect, lastError,
         appStateConfigured: appStatePresent,
         appStateRefresh: appStateRefreshManager ? appStateRefreshManager.getState() : {
@@ -243,17 +156,13 @@ function createBotRuntime({ config, logger }) {
       sessionHealth = 'checking';
       sessionMessage = 'New AppState saved. Checking the session connection.';
       lastError = null;
-      reconnectManager?.start();
       if (connect) await runtime.connect();
       return { valid: true, connected: status === 'connected' };
     },
     async connect() {
       if (connecting || status === 'connected') return { status, mqttStatus };
       if (requiresSessionUpdate) return { status: 'needs-attention', mqttStatus, sessionHealth, sessionMessage };
-      if (reconnectManager && manualDisconnect) {
-        reconnectManager.start();
-        manualDisconnect = false;
-      }
+      if (manualDisconnect) manualDisconnect = false;
       connecting = true;
       status = 'connecting';
       mqttStatus = 'connecting';
@@ -330,7 +239,6 @@ function createBotRuntime({ config, logger }) {
             });
           } catch (e) { finish(e); }
         });
-        reconnectManager?.reset();
         return { status };
       } catch (e) {
         mqttStatus = 'offline';
@@ -351,7 +259,6 @@ function createBotRuntime({ config, logger }) {
       }
     },
     async disconnected(reason) {
-      clearRepeatingMessages();
       if (!api && (status === 'offline' || requiresSessionUpdate)) return;
       lastDisconnect = new Date().toISOString();
       mqttStatus = 'offline';
@@ -367,13 +274,10 @@ function createBotRuntime({ config, logger }) {
       }
       logger.warn('FCA_DISCONNECTED', { reason: requiresSessionUpdate ? 'authentication-or-checkpoint-error' : lastError });
       reconnects++;
-      if (!manualDisconnect && !requiresSessionUpdate) reconnectManager?.schedule();
     },
     async handleEvent(event) {
-      nicknameGuard.handle(event).catch(e => logger.warn('NICKNAME_GUARD_FAILED', { error: String(e.message || e).slice(0, 200) }));
       if (!event || !['message', 'message_reply', 'messageCreate'].includes(event.type) || !event.body || !event.threadID) return;
       const body = String(event.body).trim();
-      runtime.noteRepeatingMessageReply(event);
       // Strict allow-list: only IDs configured as Owners/Admins may invoke commands or answer command prompts.
       // This intentionally keeps ordinary group messages from triggering command handlers or replies.
       if (!isAuthorizedSender(event.senderID, config.ownerIDs || [config.ownerID], config.adminIDs || [])) return;
@@ -444,7 +348,6 @@ function createBotRuntime({ config, logger }) {
     async disconnect() {
       clearRepeatingMessages();
       manualDisconnect = true;
-      reconnectManager?.stop();
       if (api && typeof api.logout === 'function') {
         try { await api.logout(); } catch (e) { logger.warn('FCA_LOGOUT_FAILED', { error: e.message }); }
       }
@@ -478,7 +381,6 @@ function createBotRuntime({ config, logger }) {
       lastConnect = null;
       lastDisconnect = null;
       mqttStatus = 'offline';
-      reconnects = 0;
       startedAt = Date.now();
       seenCommandMessages.clear();
       clearRepeatingMessages();
@@ -503,14 +405,8 @@ function createBotRuntime({ config, logger }) {
       } catch {
         await initializeAppStateRefreshManager();
       }
-      reconnectManager = new ReconnectManager({
-        connect: () => runtime.connect(), logger,
-        baseMs: config.connection?.baseBackoffMs || 2000,
-        maxMs: config.connection?.maxBackoffMs || 60000
-      });
-      reconnectManager.start();
       manualDisconnect = false;
-      try { await runtime.connect(); } catch { if (appStatePresent && !sessionCleared && !requiresSessionUpdate) reconnectManager.schedule(); }
+      try { await runtime.connect(); } catch { /* Manual reconnect only: inspect logs and reconnect from the dashboard. */ }
     },
     async listMessengerThreads(folder = 'inbox') {
       if (!api || status !== 'connected') throw new Error('Connect the account with a valid AppState first.');
