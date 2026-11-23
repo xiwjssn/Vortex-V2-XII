@@ -83,7 +83,7 @@ function createHumanWriter({ logger = console, onSafetyStop = () => {}, ...optio
   // Apply one elegant, recognizable identity to every command reply.
   // Keep attachment payloads intact and avoid duplicating the signature.
   function brandMessage(message) {
-    const signature = '⟡ 𝐕𝐎𝐑𝐓𝐄𝐗';
+    const signature = '🌀 ⟡ 𝐕𝐎𝐑𝐓𝐄𝐗';
     if (typeof message === 'string') {
       return message.startsWith(signature) ? message : signature + '\\n' + message;
     }
