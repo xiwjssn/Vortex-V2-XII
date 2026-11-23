@@ -52,7 +52,7 @@ test('human writer brands command replies and attachment captions consistently',
   const wrapped = writer.wrap(api);
   await wrapped.sendMessage('✨ Ready', 'thread-brand');
   await wrapped.sendMessage({ body: '🎵 Track', attachment: 'stream' }, 'thread-attachment');
-  assert.match(sent[0], /^⟡ 𝐕𝐎𝐑𝐓𝐄𝐗\\n✨ Ready$/);
-  assert.match(sent[1].body, /^⟡ 𝐕𝐎𝐑𝐓𝐄𝐗\\n🎵 Track$/);
+  assert.match(sent[0], /^🌀 ⟡ 𝐕𝐎𝐑𝐓𝐄𝐗\\n✨ Ready$/);
+  assert.match(sent[1].body, /^🌀 ⟡ 𝐕𝐎𝐑𝐓𝐄𝐗\\n🎵 Track$/);
   assert.equal(sent[1].attachment, 'stream');
 });
