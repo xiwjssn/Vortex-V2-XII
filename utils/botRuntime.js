@@ -77,7 +77,62 @@ function createBotRuntime({ config, logger }) {
     }
   });
   const seenCommandMessages = new Map();
+  // Runtime support used by cmds/vortex.js. This is not a separate repeat command.
+  const repeatingJobs = new Map();
+  function stopRepeatingMessage(threadID) {
+    const key = String(threadID || '');
+    const job = repeatingJobs.get(key);
+    if (!job) return { stopped: false };
+    clearInterval(job.timer);
+    repeatingJobs.delete(key);
+    return { stopped: true };
+  }
+  function startRepeatingMessage({ threadID, senderID, messages, intervalMs, inactivityMs }) {
+    const key = String(threadID || '');
+    if (!key || status !== 'connected' || !api) return { started: false, reason: 'offline' };
+    if (repeatingJobs.has(key)) return { started: false, reason: 'already-running' };
+    if (!Array.isArray(messages) || !messages.length ||
+        !Number.isSafeInteger(intervalMs) || intervalMs < 15000 || intervalMs > 86400000) {
+      return { started: false, reason: 'invalid' };
+    }
+    const job = {
+      senderID: String(senderID || ''),
+      messages: messages.map(value => String(value || '').trim()).filter(Boolean),
+      intervalMs,
+      inactivityMs: Number.isSafeInteger(inactivityMs) && inactivityMs >= 60000 ? inactivityMs : 16 * 60 * 1000,
+      lastOtherActivityAt: Date.now(),
+      index: 0,
+      sending: false,
+      timer: null
+    };
+    if (!job.messages.length) return { started: false, reason: 'invalid' };
+    job.timer = setInterval(async () => {
+      if (repeatingJobs.get(key) !== job || job.sending) return;
+      if (Date.now() - job.lastOtherActivityAt >= job.inactivityMs) {
+        stopRepeatingMessage(key);
+        return;
+      }
+      if (!api || status !== 'connected') {
+        stopRepeatingMessage(key);
+        return;
+      }
+      job.sending = true;
+      try {
+        await humanWriter.wrap(api).sendMessage(job.messages[job.index++ % job.messages.length], key);
+      } catch (error) {
+        logger.warn('VORTEX_REPEAT_SEND_FAILED', { threadID: key, error: String(error?.message || error).slice(0, 160) });
+        stopRepeatingMessage(key);
+      } finally {
+        job.sending = false;
+      }
+    }, intervalMs);
+    job.timer.unref?.();
+    repeatingJobs.set(key, job);
+    return { started: true };
+  }
   const runtime = {
+    startRepeatingMessage,
+    stopRepeatingMessage,
     getState() {
       return {
         bot: config.botName, prefix: config.prefix, status, fcaStatus: status, mqttStatus,
@@ -281,6 +336,10 @@ function createBotRuntime({ config, logger }) {
     async handleEvent(event) {
       if (!event || !['message', 'message_reply', 'messageCreate'].includes(event.type) || !event.body || !event.threadID) return;
       const body = String(event.body).trim();
+      const activeRepeat = repeatingJobs.get(String(event.threadID));
+      if (activeRepeat && String(event.senderID || '') !== activeRepeat.senderID) {
+        activeRepeat.lastOtherActivityAt = Date.now();
+      }
       // Strict allow-list: only IDs configured as Owners/Admins may invoke commands or answer command prompts.
       // This intentionally keeps ordinary group messages from triggering command handlers or replies.
       if (!isAuthorizedSender(event.senderID, config.ownerIDs || [config.ownerID], config.adminIDs || [])) return;
@@ -394,6 +453,7 @@ function createBotRuntime({ config, logger }) {
       return appStateRefreshManager.refresh({ manual: true });
     },
     async stop() {
+      for (const threadID of repeatingJobs.keys()) stopRepeatingMessage(threadID);
       appStateRefreshManager?.stop();
       await runtime.disconnect();
     },
