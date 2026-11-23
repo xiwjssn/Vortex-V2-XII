@@ -273,7 +273,6 @@ function createBotRuntime({ config, logger }) {
         lastError = String(reason || 'connection lost').slice(0, 200);
       }
       logger.warn('FCA_DISCONNECTED', { reason: requiresSessionUpdate ? 'authentication-or-checkpoint-error' : lastError });
-      reconnects++;
     },
     async handleEvent(event) {
       if (!event || !['message', 'message_reply', 'messageCreate'].includes(event.type) || !event.body || !event.threadID) return;
@@ -346,7 +345,6 @@ function createBotRuntime({ config, logger }) {
       }
     },
     async disconnect() {
-      clearRepeatingMessages();
       manualDisconnect = true;
       if (api && typeof api.logout === 'function') {
         try { await api.logout(); } catch (e) { logger.warn('FCA_LOGOUT_FAILED', { error: e.message }); }
@@ -383,7 +381,6 @@ function createBotRuntime({ config, logger }) {
       mqttStatus = 'offline';
       startedAt = Date.now();
       seenCommandMessages.clear();
-      clearRepeatingMessages();
       logger.warn('APPSTATE_SESSION_REMOVED', { localSessionDataRemoved: true });
       return { status: 'offline', appStateConfigured: false, sessionCleared: true };
     },
