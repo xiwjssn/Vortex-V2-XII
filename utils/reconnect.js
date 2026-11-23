@@ -39,7 +39,15 @@ class ReconnectManager {
         requiresAttention = !!(result && result.status === 'needs-attention');
         if (connected) this.attempts = 0;
       } catch (error) {
-        this.logger?.error?.('RECONNECT_FAILED', { error: String(error?.message || error).slice(0, 200) });
+        const message = String(error?.message || error || '').toLowerCase();
+        // A failed login that requires the owner to refresh the session or complete
+        // Facebook verification is terminal for automatic retries. Do not keep
+        // submitting the same expired/checkpointed AppState on a retry loop.
+        requiresAttention = /checkpoint|login approval|login required|invalid appstate|invalid cookie|cookie.{0,20}(expired|invalid)|session.{0,20}(expired|invalid)|not logged in|authentication failed|account disabled|account restricted|temporarily blocked|login[_\\s-]?blocked|two.factor|\\b401\\b|\\b403\\b|please log in/.test(message);
+        this.logger?.error?.('RECONNECT_FAILED', {
+          error: message.slice(0, 200),
+          requiresSessionAttention: requiresAttention
+        });
       } finally {
         this.running = false;
         if (requiresAttention) {
