@@ -80,11 +80,25 @@ function createHumanWriter({ logger = console, onSafetyStop = () => {}, ...optio
     logger.warn?.('OUTBOUND_SEND_FAILED', { threadID, error: message.slice(0, 180), failureCountInWindow: recentFailures.length });
   }
 
+  // Apply one elegant, recognizable identity to every command reply.
+  // Keep attachment payloads intact and avoid duplicating the signature.
+  function brandMessage(message) {
+    const signature = '⟡ 𝐕𝐎𝐑𝐓𝐄𝐗';
+    if (typeof message === 'string') {
+      return message.startsWith(signature) ? message : signature + '\\n' + message;
+    }
+    if (message && typeof message === 'object' && typeof message.body === 'string') {
+      return { ...message, body: message.body.startsWith(signature) ? message.body : signature + '\\n' + message.body };
+    }
+    return message;
+  }
+
   function wrap(api) {
     return new Proxy(api, {
       get(target, property) {
         if (property === 'sendMessage' && typeof target.sendMessage === 'function') {
           return (...args) => {
+            args[0] = brandMessage(args[0]);
             const threadID = String(args[1] ?? 'unknown');
             const messageToken = typeof args[2] === 'string' || typeof args[2] === 'number' ? String(args[2]) : contentKey(args[0]);
             const key = threadID + ':' + messageToken + ':' + contentKey(args[0]);
