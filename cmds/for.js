@@ -140,7 +140,8 @@ module.exports = {
     }
 
     return api.sendMessage(
-      '✅ تم ضبط الكنية على «' + target + '» للأعضاء: ' + changed + '/' + members.length + '\n' +
+      (changed ? '✅' : '❌') + ' تم ضبط الكنية على «' + target + '» للأعضاء: ' + changed + '/' + members.length + '\n' +
+      (changed < members.length ? 'تعذر تعديل بعض الأعضاء؛ تحقق من صلاحيات البوت وسجل Railway.\n' : '') +
       '🛡️ الحماية مفعلة؛ يعيد البوت الكنية عند رصد تغييرها.\n' +
       '⏱️ الفاصل بين تعديلات الأعضاء 3 ثوانٍ.\n' +
       'لإيقافها: ' + String(config.prefix || '*') + 'فور إيقاف',
