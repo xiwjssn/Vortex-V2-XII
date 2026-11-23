@@ -3,6 +3,7 @@ const path = require('node:path');
 const { loadCommands } = require('./commandLoader');
 const { validateAppState } = require('./appState');
 const { atomicWrite } = require('./atomicFile');
+const { ReconnectManager } = require('./reconnect');
 const { AppStateRefreshManager } = require('./appStateRefresh');
 const { createHumanWriter } = require('./humanWriter');
 const { isAuthorizedSender } = require('./accessControl');
@@ -22,6 +23,7 @@ function createBotRuntime({ config, logger }) {
   let appState = null;
   let sessionCleared = false;
   let appStateRefreshManager;
+  let reconnectManager;
   let mqttStatus = 'offline';
   let manualDisconnect = false;
   let requiresSessionUpdate = false;
@@ -62,6 +64,7 @@ function createBotRuntime({ config, logger }) {
     sessionHealth = 'needs-attention';
     sessionMessage = 'Facebook may have expired this session or requires account verification. Update AppState in the dashboard, then connect again.';
     lastError = sessionMessage;
+    reconnectManager?.stop();
     logger.warn('SESSION_REAUTH_REQUIRED', { reason: 'authentication-or-checkpoint-error' });
   }
   const humanWriter = createHumanWriter({
@@ -162,7 +165,7 @@ function createBotRuntime({ config, logger }) {
     async connect() {
       if (connecting || status === 'connected') return { status, mqttStatus };
       if (requiresSessionUpdate) return { status: 'needs-attention', mqttStatus, sessionHealth, sessionMessage };
-      if (manualDisconnect) manualDisconnect = false;
+      if (reconnectManager && manualDisconnect) { reconnectManager.start(); manualDisconnect = false; }
       connecting = true;
       status = 'connecting';
       mqttStatus = 'connecting';
@@ -273,6 +276,7 @@ function createBotRuntime({ config, logger }) {
         lastError = String(reason || 'connection lost').slice(0, 200);
       }
       logger.warn('FCA_DISCONNECTED', { reason: requiresSessionUpdate ? 'authentication-or-checkpoint-error' : lastError });
+      if (!manualDisconnect && !requiresSessionUpdate) reconnectManager?.schedule();
     },
     async handleEvent(event) {
       if (!event || !['message', 'message_reply', 'messageCreate'].includes(event.type) || !event.body || !event.threadID) return;
@@ -346,6 +350,7 @@ function createBotRuntime({ config, logger }) {
     },
     async disconnect() {
       manualDisconnect = true;
+      reconnectManager?.stop();
       if (api && typeof api.logout === 'function') {
         try { await api.logout(); } catch (e) { logger.warn('FCA_LOGOUT_FAILED', { error: e.message }); }
       }
@@ -402,8 +407,14 @@ function createBotRuntime({ config, logger }) {
       } catch {
         await initializeAppStateRefreshManager();
       }
+      reconnectManager = new ReconnectManager({
+        connect: () => runtime.connect(), logger,
+        baseMs: config.connection?.baseBackoffMs || 2000,
+        maxMs: config.connection?.maxBackoffMs || 60000
+      });
+      reconnectManager.start();
       manualDisconnect = false;
-      try { await runtime.connect(); } catch { /* Manual reconnect only: inspect logs and reconnect from the dashboard. */ }
+      try { await runtime.connect(); } catch { if (appStatePresent && !sessionCleared && !requiresSessionUpdate) reconnectManager.schedule(); }
     },
     async listMessengerThreads(folder = 'inbox') {
       if (!api || status !== 'connected') throw new Error('Connect the account with a valid AppState first.');
