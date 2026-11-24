@@ -1,15 +1,19 @@
 'use strict';
 
 const fs = require('node:fs/promises');
-const { createReadStream } = require('node:fs');
+const { createReadStream, createWriteStream } = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { spawn } = require('node:child_process');
 const { randomUUID } = require('node:crypto');
+const { pipeline } = require('node:stream/promises');
+const { Transform } = require('node:stream');
+const net = require('node:net');
 
 const MAX_AUDIO_BYTES = 15 * 1024 * 1024;
 const MAX_DURATION_SECONDS = 12 * 60;
 const ALIASES = ['song', 'music', 'اغنية', 'أغنية', 'موسيقى'];
+const SEARCH_API = 'https://betadash-search-download.vercel.app/yt?search=';
+const DOWNLOAD_API = 'https://nayan-video-downloader.vercel.app/ytdown?url=';
 
 function parseQuery(body, prefix = '*') {
   const text = String(body || '').trim();
@@ -19,107 +23,80 @@ function parseQuery(body, prefix = '*') {
   return match ? text.slice(match[0].length).trim() : '';
 }
 
-function parseSearchResult(data) {
-  const video = Array.isArray(data?.entries) ? data.entries.find(Boolean) : data;
-  if (!video || !video.title || !video.webpage_url || !Number.isFinite(Number(video.duration))) {
-    throw new Error('لم أجد مقطعًا مناسبًا بهذا الاسم.');
+function normalizeSearchData(data) {
+  const item = Array.isArray(data) ? data[0] : data;
+  if (!item || typeof item.url !== 'string' || typeof item.title !== 'string' || !item.title.trim()) {
+    throw new Error('لم أجد نتيجة مناسبة بهذا الاسم.');
   }
-  if (Number(video.duration) > MAX_DURATION_SECONDS) {
+  const parsed = new URL(item.url);
+  if (parsed.protocol !== 'https:' || !['youtube.com', 'www.youtube.com', 'music.youtube.com', 'youtu.be', 'm.youtube.com'].includes(parsed.hostname.toLowerCase())) {
+    throw new Error('نتيجة البحث ليست رابط YouTube صالحًا.');
+  }
+  if (item.duration != null && Number.isFinite(Number(item.duration)) && Number(item.duration) > MAX_DURATION_SECONDS) {
     throw new Error('مدة المقطع أطول من 12 دقيقة؛ اختر نسخة أقصر.');
   }
-  const parsed = new URL(video.webpage_url);
-  const host = parsed.hostname.toLowerCase().replace(/^www\\./, '');
-  if (!['youtube.com', 'music.youtube.com', 'youtu.be', 'm.youtube.com', 'soundcloud.com', 'on.soundcloud.com'].includes(host)) {
-    throw new Error('نتيجة البحث من مصدر غير مدعوم.');
-  }
-  return video;
+  return {
+    url: parsed.toString(),
+    title: item.title.trim().slice(0, 180),
+    channelName: String(item.channelName || item.channel || 'YouTube').slice(0, 100)
+  };
 }
 
-function runYtDlp(args, { timeoutMs = 120000, maxOutputBytes = 2 * 1024 * 1024 } = {}) {
-  return new Promise((resolve, reject) => {
-    let stdout = '';
-    let stderr = '';
-    let settled = false;
-    const child = spawn(process.env.YT_DLP_PATH || 'yt-dlp', args, { stdio: ['ignore', 'pipe', 'pipe'] });
-    const timer = setTimeout(() => {
-      child.kill('SIGKILL');
-      finish(new Error('انتهت مهلة البحث أو التنزيل.'));
-    }, timeoutMs);
-    function finish(error, result) {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      error ? reject(error) : resolve(result);
+function validatePublicHttpsUrl(value) {
+  let url;
+  try { url = new URL(value); } catch { throw new Error('رابط ملف الصوت غير صالح.'); }
+  if (url.protocol !== 'https:' || url.username || url.password) throw new Error('مصدر ملف الصوت غير آمن.');
+  const host = url.hostname.toLowerCase().replace(/^\\[|\\]$/g, '');
+  if (!host || host === 'localhost' || host.endsWith('.localhost') || host.endsWith('.local') || host.endsWith('.internal')) {
+    throw new Error('تم رفض عنوان تنزيل غير عام.');
+  }
+  if (net.isIP(host)) {
+    if (host === '127.0.0.1' || host === '::1' || host.startsWith('10.') || host.startsWith('192.168.') || host.startsWith('169.254.') || /^172\\.(1[6-9]|2[0-9]|3[01])\\./.test(host) || host.startsWith('fc') || host.startsWith('fd') || host.startsWith('fe80:')) {
+      throw new Error('تم رفض عنوان تنزيل محلي.');
     }
-    child.stdout.on('data', chunk => {
-      stdout += chunk.toString();
-      if (Buffer.byteLength(stdout) > maxOutputBytes) {
-        child.kill('SIGKILL');
-        finish(new Error('استجابة yt-dlp أكبر من الحد المسموح.'));
-      }
-    });
-    child.stderr.on('data', chunk => {
-      stderr = (stderr + chunk.toString()).slice(-4000);
-    });
-    child.once('error', error => {
-      if (error.code === 'ENOENT') finish(new Error('yt-dlp غير مثبت في بيئة التشغيل.'));
-      else finish(error);
-    });
-    child.once('close', code => {
-      if (settled) return;
-      if (code !== 0) finish(new Error(stderr.trim().slice(-700) || 'فشل yt-dlp.'));
-      else finish(null, { stdout, stderr });
-    });
+  }
+  return url;
+}
+
+async function fetchJson(url, timeoutMs = 25000) {
+  const response = await fetch(url, { signal: AbortSignal.timeout(timeoutMs), headers: { 'user-agent': 'VORTEX-Messenger-Music/1.0' } });
+  if (!response.ok) throw new Error('خدمة البحث أو التحميل غير متاحة حاليًا (HTTP ' + response.status + ').');
+  const text = await response.text();
+  if (Buffer.byteLength(text) > 1024 * 1024) throw new Error('استجابة خدمة الموسيقى أكبر من الحد.');
+  try { return JSON.parse(text); } catch { throw new Error('أعادت خدمة الموسيقى بيانات غير مفهومة.'); }
+}
+
+async function searchTrack(query) {
+  const data = await fetchJson(SEARCH_API + encodeURIComponent(query));
+  return normalizeSearchData(data);
+}
+
+async function resolveAudioUrl(track) {
+  const data = await fetchJson(DOWNLOAD_API + encodeURIComponent(track.url), 35000);
+  const audio = data?.data?.audio;
+  if (typeof audio !== 'string') throw new Error('لم توفر خدمة التحميل رابط ملف صوتي.');
+  return validatePublicHttpsUrl(audio).toString();
+}
+
+async function downloadAudio(audioUrl, directory) {
+  const url = validatePublicHttpsUrl(audioUrl);
+  const response = await fetch(url, { signal: AbortSignal.timeout(90000), headers: { 'user-agent': 'VORTEX-Messenger-Music/1.0' } });
+  if (!response.ok || !response.body) throw new Error('فشل تنزيل الملف الصوتي (HTTP ' + response.status + ').');
+  const finalUrl = validatePublicHttpsUrl(response.url || url.toString());
+  if (Number(response.headers.get('content-length')) > MAX_AUDIO_BYTES) throw new Error('حجم الأغنية أكبر من 15 ميغابايت.');
+  const filePath = path.join(directory, 'track.mp3');
+  let total = 0;
+  const limiter = new Transform({
+    transform(chunk, _encoding, callback) {
+      total += chunk.length;
+      if (total > MAX_AUDIO_BYTES) return callback(new Error('حجم الأغنية تجاوز 15 ميغابايت.'));
+      callback(null, chunk);
+    }
   });
-}
-
-async function searchVideo(query) {
-  let lastError;
-  for (const search of ['ytsearch1:' + query, 'scsearch1:' + query]) {
-    try {
-      const result = await runYtDlp([
-        '--no-warnings', '--no-playlist', '--skip-download', '--dump-single-json',
-        search.startsWith('ytsearch') ? '--extractor-args' : '',
-        ...(search.startsWith('ytsearch') ? ['youtube:player_client=default'] : []),
-        search
-      ].filter(Boolean), { timeoutMs: 35000 });
-      let data;
-      try { data = JSON.parse(result.stdout); }
-      catch { throw new Error('تعذرت قراءة نتيجة البحث.'); }
-      return parseSearchResult(data);
-    } catch (error) {
-      lastError = error;
-      const msg = String(error?.message || error).toLowerCase();
-      if (search.startsWith('ytsearch') && /sign in|not a bot|captcha|confirm you|authentication|cookies/.test(msg)) {
-        console.warn('SONG_YOUTUBE_BLOCKED: YouTube requires authentication; trying SoundCloud search.');
-        continue;
-      }
-      if (search.startsWith('ytsearch')) continue;
-    }
-  }
-  const reason = String(lastError?.message || '').toLowerCase();
-  if (/sign in|not a bot|captcha|confirm you|authentication|cookies/.test(reason)) {
-    throw new Error('YouTube يطلب التحقق من الحساب من خادم البوت، ولم نجد نسخة قابلة للتنزيل من مصدر بديل. جرّب اسمًا آخر أو ملفًا متاحًا للتنزيل.');
-  }
-  throw new Error('لم أجد مقطعًا متاحًا للتنزيل بهذا الاسم.');
-}
-
-async function downloadAudio(video, directory) {
-  const template = path.join(directory, '%(id)s.%(ext)s');
-  await runYtDlp([
-    '--no-warnings', '--no-playlist', '--no-progress',
-    '--extract-audio', '--audio-format', 'mp3', '--audio-quality', '5',
-    '--format', 'bestaudio/best', '--max-filesize', '15M',
-    '--output', template, video.webpage_url
-  ], { timeoutMs: 150000, maxOutputBytes: 512 * 1024 });
-  const files = await fs.readdir(directory);
-  const audioName = files.find(name => name.toLowerCase().endsWith('.mp3'));
-  if (!audioName) throw new Error('لم ينتج yt-dlp ملف MP3. تأكد من توفر FFmpeg.');
-  const audioPath = path.join(directory, audioName);
-  const stat = await fs.stat(audioPath);
-  if (!stat.isFile() || stat.size === 0) throw new Error('الملف الصوتي فارغ.');
-  if (stat.size > MAX_AUDIO_BYTES) throw new Error('حجم الملف تجاوز 15 ميغابايت.');
-  return audioPath;
+  await pipeline(response.body, limiter, createWriteStream(filePath));
+  const stat = await fs.stat(filePath);
+  if (!stat.size) throw new Error('ملف الصوت فارغ.');
+  return filePath;
 }
 
 async function callSendMessage(api, message, event) {
@@ -141,33 +118,26 @@ async function callSendMessage(api, message, event) {
 module.exports = {
   name: 'song',
   aliases: ['music', 'اغنية', 'أغنية', 'موسيقى'],
-  description: 'البحث عن مقطع متاح على YouTube أو SoundCloud وإرساله كملف MP3',
-  _test: { parseQuery, parseSearchResult, runYtDlp, searchVideo, downloadAudio, callSendMessage, MAX_AUDIO_BYTES, MAX_DURATION_SECONDS },
+  description: 'البحث عن أغنية وإرسالها كملف MP3 عبر خدمة بحث وتنزيل خارجية',
+  _test: { parseQuery, normalizeSearchData, validatePublicHttpsUrl, callSendMessage, MAX_AUDIO_BYTES, MAX_DURATION_SECONDS },
   async execute(api, event) {
     const query = parseQuery(event?.body, event?.config?.prefix || '*');
-    if (!query) {
-      return api.sendMessage('🎵 اكتب اسم المقطع بعد الأمر.\nمثال: *موسيقى اسم الأغنية', event.threadID, event.messageID);
-    }
-    if (query.length > 180) {
-      return api.sendMessage('⚠️ اسم البحث طويل جدًا؛ اختصره قليلًا.', event.threadID, event.messageID);
-    }
+    if (!query) return api.sendMessage('🎵 اكتب اسم الأغنية بعد الأمر.\\nمثال: *موسيقى اسم الأغنية', event.threadID, event.messageID);
+    if (query.length > 180) return api.sendMessage('⚠️ اسم البحث طويل جدًا؛ اختصره قليلًا.', event.threadID, event.messageID);
     let directory;
     try {
-      await api.sendMessage('🔎 أبحث عن المقطع وأجهّز الملف الصوتي…', event.threadID, event.messageID);
-      const video = await searchVideo(query);
-      directory = await fs.mkdtemp(path.join(os.tmpdir(), 'vortex-music-' + randomUUID() + '-'));
-      const audioPath = await downloadAudio(video, directory);
-      const title = String(video.title || query).replace(/[\r\n]+/g, ' ').slice(0, 150);
+      await api.sendMessage('🔎 أبحث عن الأغنية وأجهّز الملف الصوتي…', event.threadID, event.messageID);
+      const track = await searchTrack(query);
+      const audioUrl = await resolveAudioUrl(track);
+      directory = await fs.mkdtemp(path.join(os.tmpdir(), 'vortex-song-' + randomUUID() + '-'));
+      const audioPath = await downloadAudio(audioUrl, directory);
       await callSendMessage(api, {
-        body: '🎵 ' + title + '\n📎 ملف MP3',
+        body: '🎵 ' + track.title + '\\n🎤 ' + track.channelName + '\\n📎 ملف MP3',
         attachment: createReadStream(audioPath)
       }, event);
     } catch (error) {
-      console.error('SONG_COMMAND_FAILED', String(error?.message || error).slice(0, 240));
-      await api.sendMessage(
-        '❌ تعذّر تجهيز الأغنية: ' + String(error?.message || error).slice(0, 180),
-        event.threadID, event.messageID
-      );
+      console.error('SONG_COMMAND_FAILED', String(error?.message || error).slice(0, 220));
+      await api.sendMessage('❌ تعذّر تجهيز الأغنية: ' + String(error?.message || 'الخدمة غير متاحة').slice(0, 160), event.threadID, event.messageID);
     } finally {
       if (directory) await fs.rm(directory, { recursive: true, force: true }).catch(() => {});
     }
