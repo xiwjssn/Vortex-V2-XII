@@ -160,7 +160,7 @@ async function startDashboard({ config, logger, runtime }) {
           let imageUrl = '';
           try { const parsed = new URL(String(candidate)); if (parsed.protocol === 'https:') imageUrl = parsed.href; } catch {}
           const kind = String(a.type || a.mimeType || a.mime_type || '').toLowerCase();
-          return { imageUrl: imageUrl && (!kind || /photo|image|image\/.test(kind)) ? imageUrl : '';
+          return { imageUrl: imageUrl && (!kind || /photo|image|image\//.test(kind)) ? imageUrl : '' };
         }).filter(a => a.imageUrl)
       })) });
     } catch (e) { res.status(503).json({ error: String(e.message || e).slice(0, 220) }); }
