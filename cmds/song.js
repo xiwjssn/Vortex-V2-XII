@@ -28,8 +28,9 @@ function parseSearchResult(data) {
     throw new Error('مدة المقطع أطول من 12 دقيقة؛ اختر نسخة أقصر.');
   }
   const parsed = new URL(video.webpage_url);
-  if (!['youtube.com', 'www.youtube.com', 'music.youtube.com', 'youtu.be', 'm.youtube.com'].includes(parsed.hostname)) {
-    throw new Error('نتيجة البحث ليست من YouTube.');
+  const host = parsed.hostname.toLowerCase().replace(/^www\\./, '');
+  if (!['youtube.com', 'music.youtube.com', 'youtu.be', 'm.youtube.com', 'soundcloud.com', 'on.soundcloud.com'].includes(host)) {
+    throw new Error('نتيجة البحث من مصدر غير مدعوم.');
   }
   return video;
 }
@@ -73,15 +74,34 @@ function runYtDlp(args, { timeoutMs = 120000, maxOutputBytes = 2 * 1024 * 1024 }
 }
 
 async function searchVideo(query) {
-  const result = await runYtDlp([
-    '--no-warnings', '--no-playlist', '--skip-download', '--dump-single-json',
-    '--extractor-args', 'youtube:player_client=default',
-    'ytsearch1:' + query
-  ], { timeoutMs: 30000 });
-  let data;
-  try { data = JSON.parse(result.stdout); }
-  catch { throw new Error('لم أستطع قراءة نتيجة البحث.'); }
-  return parseSearchResult(data);
+  let lastError;
+  for (const search of ['ytsearch1:' + query, 'scsearch1:' + query]) {
+    try {
+      const result = await runYtDlp([
+        '--no-warnings', '--no-playlist', '--skip-download', '--dump-single-json',
+        search.startsWith('ytsearch') ? '--extractor-args' : '',
+        ...(search.startsWith('ytsearch') ? ['youtube:player_client=default'] : []),
+        search
+      ].filter(Boolean), { timeoutMs: 35000 });
+      let data;
+      try { data = JSON.parse(result.stdout); }
+      catch { throw new Error('تعذرت قراءة نتيجة البحث.'); }
+      return parseSearchResult(data);
+    } catch (error) {
+      lastError = error;
+      const msg = String(error?.message || error).toLowerCase();
+      if (search.startsWith('ytsearch') && /sign in|not a bot|captcha|confirm you|authentication|cookies/.test(msg)) {
+        console.warn('SONG_YOUTUBE_BLOCKED: YouTube requires authentication; trying SoundCloud search.');
+        continue;
+      }
+      if (search.startsWith('ytsearch')) continue;
+    }
+  }
+  const reason = String(lastError?.message || '').toLowerCase();
+  if (/sign in|not a bot|captcha|confirm you|authentication|cookies/.test(reason)) {
+    throw new Error('YouTube يطلب التحقق من الحساب من خادم البوت، ولم نجد نسخة قابلة للتنزيل من مصدر بديل. جرّب اسمًا آخر أو ملفًا متاحًا للتنزيل.');
+  }
+  throw new Error('لم أجد مقطعًا متاحًا للتنزيل بهذا الاسم.');
 }
 
 async function downloadAudio(video, directory) {
@@ -121,7 +141,7 @@ async function callSendMessage(api, message, event) {
 module.exports = {
   name: 'song',
   aliases: ['music', 'اغنية', 'أغنية', 'موسيقى'],
-  description: 'البحث عن مقطع YouTube وإرساله كملف MP3',
+  description: 'البحث عن مقطع متاح على YouTube أو SoundCloud وإرساله كملف MP3',
   _test: { parseQuery, parseSearchResult, runYtDlp, searchVideo, downloadAudio, callSendMessage, MAX_AUDIO_BYTES, MAX_DURATION_SECONDS },
   async execute(api, event) {
     const query = parseQuery(event?.body, event?.config?.prefix || '*');
