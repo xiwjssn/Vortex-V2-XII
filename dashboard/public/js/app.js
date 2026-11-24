@@ -155,19 +155,6 @@ async function status() {
     }
   }
 }
-async function secondAccountStatus() {
-  if (currentRole !== 'owner' || !$('#account2-status')) return;
-  try {
-    const s = await api('/api/accounts/2/status');
-    $('#account2-status').textContent = s.status || 'unknown';
-    $('#account2-detail').textContent = s.appStateConfigured
-      ? (s.sessionMessage || (s.connected ? 'Connected' : 'AppState saved'))
-      : 'No AppState saved for Account 2.';
-  } catch (e) {
-    $('#account2-status').textContent = 'Unavailable';
-    $('#account2-detail').textContent = e.message;
-  }
-}
 const esc = s => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 async function commands() {
   const d = await api('/api/commands');
@@ -198,14 +185,14 @@ async function logs() {
   $('#logs-list').innerHTML = d.logs.slice().reverse().map(l => `<div class="log-row"><time>${esc(fmt(l.time))}</time><b class="log-${esc(l.type.toLowerCase())}">${esc(l.type)}</b><span>${esc(l.message)}</span></div>`).join('') || '<p class="muted">No logs captured in this process.</p>';
 }
 let messengerFolder='inbox', messengerThread=null, messengerThreads=[];
-function messengerQuery(path){const account=$('#messenger-account')?.value||'1';return path+(path.includes('?')?'&':'?')+'account='+encodeURIComponent(account);}
+function messengerQuery(path){return path;}
 function messengerTime(value){if(!value)return '';const n=Number(value),d=new Date(n<1e12?n*1000:n);return Number.isNaN(d.getTime())?'':d.toLocaleString();}
-async function refreshMessengerAccess(){const nav=$('#messenger-nav');if(!nav)return;try{const a=await api('/api/messenger/status?account=1');const b=currentRole==='owner'?await api('/api/messenger/status?account=2'):{configured:false};nav.hidden=!a.configured&&!(currentRole==='owner'&&b.configured);const o=$('#messenger-account option[value="2"]');if(o)o.hidden=currentRole!=='owner'||!b.configured;if($('#messenger-account').value==='2'&&(currentRole!=='owner'||!b.configured))$('#messenger-account').value='1';}catch{nav.hidden=true;}}
+async function refreshMessengerAccess(){const nav=$('#messenger-nav');if(!nav)return;try{const a=await api('/api/messenger/status');nav.hidden=!a.configured;}catch{nav.hidden=true;}}
 async function loadMessenger(){if(!$('#messenger-connection'))return;try{const s=await api(messengerQuery('/api/messenger/status'));$('#messenger-connection').textContent=s.connected?'● Account connected':s.configured?'○ Account offline':'🔒 No linked session';$('#messenger-help').textContent=s.connected?'Connected to Account '+s.account+'. Choose a folder to load conversations.':'Save and connect this account’s AppState in Account settings first.';if(!s.configured||!s.connected){$('#messenger-threads').innerHTML='<p class="muted">Messenger is locked until a valid session is connected.</p>';$('#messenger-messages').innerHTML='<p class="muted">No active session.</p>';$('#messenger-reply-form').hidden=true;return;}const d=await api(messengerQuery('/api/messenger/threads?folder='+encodeURIComponent(messengerFolder)));messengerThreads=d.threads||[];renderMessengerThreads();}catch(e){$('#messenger-connection').textContent='Messenger unavailable';$('#messenger-threads').innerHTML='<p class="muted">'+esc(e.message)+'</p>';}}
 function renderMessengerThreads(){const q=($('#messenger-search').value||'').toLowerCase(),v=messengerThreads.filter(t=>(t.name+' '+t.snippet).toLowerCase().includes(q));$('#messenger-inbox-count').textContent=messengerFolder==='inbox'?String(messengerThreads.length):'—';$('#messenger-threads').innerHTML=v.map(t=>'<button class="messenger-thread '+(messengerThread&&messengerThread.threadID===t.threadID?'active':'')+'" data-messenger-thread="'+esc(t.threadID)+'"><span class="messenger-avatar">'+esc((t.name||'?').slice(0,1).toUpperCase())+'</span><span class="messenger-thread-copy"><b>'+esc(t.name||'Conversation')+'</b><small>'+esc(t.snippet||'No preview')+'</small><small>'+esc(messengerTime(t.timestamp))+'</small></span>'+(t.unreadCount?'<i>'+esc(String(t.unreadCount))+'</i>':'')+'</button>').join('')||'<p class="muted">No conversations returned for this folder, or the library does not expose it.</p>';}
 async function openMessengerThread(id){const t=messengerThreads.find(x=>x.threadID===id);if(!t)return;messengerThread=t;$('#messenger-chat-title').textContent=t.name||'Conversation';$('#messenger-chat-subtitle').textContent='Thread ID: '+id;$('#messenger-request-actions').hidden=messengerFolder!=='requests'||currentRole!=='owner';$('#messenger-reply-form').hidden=currentRole!=='owner';$('#messenger-messages').innerHTML='<p class="muted">Loading messages…</p>';renderMessengerThreads();try{const d=await api(messengerQuery('/api/messenger/threads/'+encodeURIComponent(id)+'/messages'));$('#messenger-messages').innerHTML=(d.messages||[]).map(m=>'<div class="messenger-bubble '+(m.senderID===ownerID?'outgoing':'')+'"><p>'+esc(m.body||(m.isUnsent?'Message removed':''))+'</p><small>'+esc(messengerTime(m.timestamp))+'</small></div>').join('')||'<p class="muted">No messages returned for this conversation.</p>';$('#messenger-messages').scrollTop=$('#messenger-messages').scrollHeight;}catch(e){$('#messenger-messages').innerHTML='<p class="muted">'+esc(e.message)+'</p>';}}
 async function messengerRequestAction(action){if(!messengerThread)return;try{await api(messengerQuery('/api/messenger/requests/'+encodeURIComponent(messengerThread.threadID)),{method:'POST',body:JSON.stringify({action})});notice(action==='accept'?'Request accepted.':'Request declined.');messengerThread=null;await loadMessenger();$('#messenger-messages').innerHTML='<p class="muted">Choose a conversation.</p>';}catch(e){notice(e.message,true);}}
-function bindMessenger(){$('#messenger-refresh')?.addEventListener('click',loadMessenger);$('#messenger-account')?.addEventListener('change',()=>{messengerThread=null;loadMessenger();});$('#messenger-search')?.addEventListener('input',renderMessengerThreads);$$('.messenger-folder').forEach(b=>b.addEventListener('click',()=>{$$('.messenger-folder').forEach(x=>x.classList.toggle('active',x===b));messengerFolder=b.dataset.folder;messengerThread=null;$('#messenger-messages').innerHTML='<p class="muted">Choose a conversation.</p>';$('#messenger-reply-form').hidden=true;loadMessenger();}));$('#messenger-threads')?.addEventListener('click',e=>{const b=e.target.closest('[data-messenger-thread]');if(b)openMessengerThread(b.dataset.messengerThread);});$('#messenger-accept')?.addEventListener('click',()=>messengerRequestAction('accept'));$('#messenger-decline')?.addEventListener('click',()=>messengerRequestAction('decline'));$('#messenger-reply-form')?.addEventListener('submit',async e=>{e.preventDefault();if(!messengerThread)return;const b=e.currentTarget.querySelector('button'),f=$('#messenger-reply');b.disabled=true;try{await api(messengerQuery('/api/messenger/threads/'+encodeURIComponent(messengerThread.threadID)+'/messages'),{method:'POST',body:JSON.stringify({message:f.value})});f.value='';notice('Reply sent.');await openMessengerThread(messengerThread.threadID);}catch(x){notice(x.message,true);}finally{b.disabled=false;}});}
+function bindMessenger(){$('#messenger-refresh')?.addEventListener('click',loadMessenger);$('#messenger-search')?.addEventListener('input',renderMessengerThreads);$$('.messenger-folder').forEach(b=>b.addEventListener('click',()=>{$$('.messenger-folder').forEach(x=>x.classList.toggle('active',x===b));messengerFolder=b.dataset.folder;messengerThread=null;$('#messenger-messages').innerHTML='<p class="muted">Choose a conversation.</p>';$('#messenger-reply-form').hidden=true;loadMessenger();}));$('#messenger-threads')?.addEventListener('click',e=>{const b=e.target.closest('[data-messenger-thread]');if(b)openMessengerThread(b.dataset.messengerThread);});$('#messenger-accept')?.addEventListener('click',()=>messengerRequestAction('accept'));$('#messenger-decline')?.addEventListener('click',()=>messengerRequestAction('decline'));$('#messenger-reply-form')?.addEventListener('submit',async e=>{e.preventDefault();if(!messengerThread)return;const b=e.currentTarget.querySelector('button'),f=$('#messenger-reply');b.disabled=true;try{await api(messengerQuery('/api/messenger/threads/'+encodeURIComponent(messengerThread.threadID)+'/messages'),{method:'POST',body:JSON.stringify({message:f.value})});f.value='';notice('Reply sent.');await openMessengerThread(messengerThread.threadID);}catch(x){notice(x.message,true);}finally{b.disabled=false;}});}
 function applyRole(role) {
   currentRole = role === 'owner' ? 'owner' : 'admin';
   document.body.dataset.role = currentRole;
@@ -227,8 +214,7 @@ function applyRole(role) {
 async function refreshAll() {
   try {
     const jobs = [status(), commands(), logs()];
-    if (currentRole === 'owner') jobs.push(secondAccountStatus());
-    if (currentRole === 'owner') jobs.push(admins(), settings());
+        if (currentRole === 'owner') jobs.push(admins(), settings());
     await Promise.all(jobs);
   } catch (e) { if (!String(e.message).includes('Authentication')) notice(e.message, true); }
 }
@@ -330,45 +316,6 @@ async function saveAppState(connect) {
     await status();
   } catch (e) { notice(e.message, true); }
 }
-$('#account2-validate-appstate')?.addEventListener('click', async () => {
-  try {
-    const appState = JSON.parse($('#account2-appstate-input').value);
-    await api('/api/accounts/2/appstate/validate', { method: 'POST', body: JSON.stringify({ appState }) });
-    $('#account2-appstate-result').textContent = 'Valid AppState format. Content was not logged.';
-    notice('Account 2 AppState format is valid.');
-  } catch (e) { $('#account2-appstate-result').textContent = e.message; notice(e.message, true); }
-});
-async function saveAccount2AppState(connect) {
-  try {
-    const appState = JSON.parse($('#account2-appstate-input').value);
-    await api('/api/accounts/2/appstate/' + (connect ? 'connect' : 'save'), { method: 'POST', body: JSON.stringify({ appState }) });
-    $('#account2-appstate-input').value = '';
-    $('#account2-appstate-result').textContent = connect ? 'Connection attempt completed.' : 'AppState saved securely.';
-    notice(connect ? 'Account 2 connection attempt completed.' : 'Account 2 AppState saved securely.');
-    await secondAccountStatus();
-  } catch (e) { notice(e.message, true); }
-}
-$('#account2-save-appstate')?.addEventListener('click', () => saveAccount2AppState(false));
-$('#account2-connect-appstate')?.addEventListener('click', () => saveAccount2AppState(true));
-$('#account2-remove-session')?.addEventListener('click', async () => {
-  if (!confirm('Remove Account 2 session and its saved AppState?')) return;
-  try {
-    await api('/api/accounts/2/appstate/session', { method: 'DELETE' });
-    $('#account2-appstate-input').value = '';
-    $('#account2-appstate-result').textContent = 'Account 2 session removed.';
-    notice('Account 2 session removed.');
-    await secondAccountStatus();
-  } catch (e) { notice(e.message, true); }
-});
-document.addEventListener('click', async e => {
-  const button = e.target.closest('[data-account2-action]');
-  if (!button) return;
-  try {
-    const d = await api('/api/accounts/2/connection/' + button.dataset.account2Action, { method: 'POST', body: '{}' });
-    notice('Account 2 status: ' + (d.status || 'updated'));
-    await secondAccountStatus();
-  } catch (error) { notice(error.message, true); }
-});
 $('#refresh-commands').addEventListener('click', async () => {
   try { await api('/api/commands/refresh', { method: 'POST', body: '{}' }); await commands(); notice('Commands refreshed.'); }
   catch (e) { notice(e.message, true); }
@@ -418,7 +365,7 @@ $('#clear-logs').addEventListener('click', async () => {
     bindMessenger();
     await refreshMessengerAccess();
     await refreshAll();
-    setInterval(() => { status().catch(() => {}); secondAccountStatus().catch(() => {}); refreshMessengerAccess().catch(() => {}); }, 5000);
+    setInterval(() => { status().catch(() => {}); refreshMessengerAccess().catch(() => {}); }, 5000);
     setInterval(() => logs().catch(() => {}), 7000);
     setInterval(updateAppStateCountdown, 1000);
   } catch { location.href = '/login'; }
