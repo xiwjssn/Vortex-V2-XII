@@ -540,7 +540,7 @@ function createBotRuntime({ config, logger }) {
       if(!api||status!=='connected')throw new Error('Connect the account with a valid AppState first.');
       const id=String(threadID||''),body=typeof message==='string'?message.trim():'';if(!/^\d{1,40}$/.test(id))throw new Error('Invalid thread ID.');if(body.length>2000)throw new Error('Message is limited to 2000 characters.');
       let temp='';const data=typeof options.imageData==='string'?options.imageData:'';
-      if(data){const match=data.match(/^data:(image\\/(?:jpeg|png|gif|webp));base64,([A-Za-z0-9+/=]+)$/);if(!match)throw new Error('Unsupported image format.');
+      if(data){const match=data.match(/^data:(image\/(?:jpeg|png|gif|webp));base64,([A-Za-z0-9+/=]+)$/);if(!match)throw new Error('Unsupported image format.');
         const buf=Buffer.from(match[2],'base64');if(!buf.length||buf.length>5*1024*1024)throw new Error('Image must be 5 MB or smaller.');
         const mime=match[1],valid=mime==='image/png'?buf.subarray(0,8).equals(Buffer.from([137,80,78,71,13,10,26,10])):mime==='image/jpeg'?buf[0]===255&&buf[1]===216&&buf[buf.length-1]===255&&buf[buf.length-2]===217:mime==='image/gif'?buf.subarray(0,3).toString()==='GIF':buf.subarray(0,4).toString()==='RIFF'&&buf.subarray(8,12).toString()==='WEBP';if(!valid)throw new Error('Image signature mismatch.');
         const dir=path.join(config.dataDir,'messenger-uploads');await fs.mkdir(dir,{recursive:true,mode:0o700});temp=path.join(dir,require('node:crypto').randomUUID()+'.img');await fs.writeFile(temp,buf,{mode:0o600,flag:'wx'});
