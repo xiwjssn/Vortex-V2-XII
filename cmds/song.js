@@ -79,10 +79,20 @@ async function resolveAudioUrl(track) {
 }
 
 async function downloadAudio(audioUrl, directory) {
-  const url = validatePublicHttpsUrl(audioUrl);
-  const response = await fetch(url, { signal: AbortSignal.timeout(90000), headers: { 'user-agent': 'VORTEX-Messenger-Music/1.0' } });
+  let url = validatePublicHttpsUrl(audioUrl);
+  let response;
+  for (let redirects = 0; redirects <= 4; redirects++) {
+    response = await fetch(url, { redirect: 'manual', signal: AbortSignal.timeout(90000), headers: { 'user-agent': 'VORTEX-Messenger-Music/1.0' } });
+    if (response.status >= 300 && response.status < 400) {
+      const location = response.headers.get('location');
+      await response.body?.cancel().catch(() => {});
+      if (!location || redirects === 4) throw new Error('رابط تنزيل الصوت أعاد تحويلات كثيرة أو غير صالحة.');
+      url = validatePublicHttpsUrl(new URL(location, url).toString());
+      continue;
+    }
+    break;
+  }
   if (!response.ok || !response.body) throw new Error('فشل تنزيل الملف الصوتي (HTTP ' + response.status + ').');
-  const finalUrl = validatePublicHttpsUrl(response.url || url.toString());
   if (Number(response.headers.get('content-length')) > MAX_AUDIO_BYTES) throw new Error('حجم الأغنية أكبر من 15 ميغابايت.');
   const filePath = path.join(directory, 'track.mp3');
   let total = 0;
