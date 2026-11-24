@@ -111,6 +111,13 @@ function createBotRuntime({ config, logger }) {
     repeatingJobs.set(key, job);
     return { started: true };
   }
+  async function callMessengerApi(method,args,timeoutMs=15000){
+    if(!api||typeof api[method]!=='function')throw new Error('FCA method unavailable: '+method);
+    return new Promise((resolve,reject)=>{let done=false;const timer=setTimeout(()=>finish(new Error(method+' timed out.')),timeoutMs);
+      function finish(error,value){if(done)return;done=true;clearTimeout(timer);error?reject(new Error(String(error.message||error).slice(0,220))):resolve(value);}
+      try{const result=api[method](...args,finish);if(result&&typeof result.then==='function')result.then(v=>finish(null,v),finish);else if(result!==undefined&&api[method].length<=args.length)finish(null,result);}catch(e){finish(e);}
+    });
+  }
   const runtime = {
     startRepeatingMessage,
     stopRepeatingMessage,
@@ -505,6 +512,42 @@ function createBotRuntime({ config, logger }) {
           if (result && typeof result.then === 'function') result.then(value => finish(null, value), finish);
         } catch (error) { finish(error); }
       });
+    },
+    async getMessengerGroupInfo(threadID) {
+      if(!api||status!=='connected')throw new Error('Connect the account with a valid AppState first.');
+      const id=String(threadID||'');if(!/^\d{1,40}$/.test(id))throw new Error('Invalid thread ID.');
+      const info=await callMessengerApi('getThreadInfo',[id]);
+      const participants=Array.isArray(info.participantIDs)?info.participantIDs.map(String).slice(0,1000):[];
+      const admins=Array.isArray(info.adminIDs)?info.adminIDs.map(String):[];
+      let botID='';try{botID=String(await callMessengerApi('getCurrentUserID',[]));}catch{}
+      const raw=Array.isArray(info.userInfo)?info.userInfo:Object.values(info.userInfo||{});
+      const names=new Map(raw.map(u=>[String(u.id||u.userID||u.uid||''),String(u.name||u.fullName||u.firstName||u.displayName||'')]).filter(([id])=>id));
+      if(participants.some(id=>!names.has(id))&&typeof api.getUserInfo==='function'){try{const more=await callMessengerApi('getUserInfo',[participants]);for(const u of(Array.isArray(more)?more:Object.values(more||{}))){const id=String(u.id||u.userID||u.uid||''),name=String(u.name||u.fullName||u.firstName||u.displayName||'');if(id&&name)names.set(id,name);}}catch{}}
+      return{threadID:id,threadName:String(info.threadName||''),isGroup:!!info.isGroup||participants.length>2,botID,isBotAdmin:!!botID&&admins.includes(botID),admins:participants.filter(id=>admins.includes(id)).map(id=>({id,name:names.get(id)||''})),members:participants.filter(id=>!admins.includes(id)).map(id=>({id,name:names.get(id)||''})),participantCount:participants.length};
+    },
+    async addMessengerMember(threadID,userID){
+      const id=String(threadID||''),uid=String(userID||'').trim();if(!/^\d{1,40}$/.test(id)||!/^\d{1,40}$/.test(uid))throw new Error('Enter a valid numeric Messenger user ID.');
+      const info=await runtime.getMessengerGroupInfo(id);if(!info.isGroup)throw new Error('Only group chats support member management.');if(!info.isBotAdmin)throw new Error('Bot must be a group admin.');if(uid===info.botID)throw new Error('Bot is already in this group.');
+      await callMessengerApi('addUserToGroup',[uid,id]);return{ok:true,added:uid};
+    },
+    async removeMessengerMember(threadID,userID){
+      const id=String(threadID||''),uid=String(userID||'').trim();if(!/^\d{1,40}$/.test(id)||!/^\d{1,40}$/.test(uid))throw new Error('Invalid group/member ID.');
+      const info=await runtime.getMessengerGroupInfo(id);if(!info.isGroup)throw new Error('Only group chats support member management.');if(!info.isBotAdmin)throw new Error('Bot must be a group admin.');if(uid===info.botID)throw new Error('Bot cannot remove itself.');
+      if(![...info.admins,...info.members].some(m=>m.id===uid))throw new Error('User is not in this group.');
+      await callMessengerApi('removeUserFromGroup',[uid,id]);return{ok:true,removed:uid};
+    },
+    async sendMessengerReply(threadID,message,options={}){
+      if(!api||status!=='connected')throw new Error('Connect the account with a valid AppState first.');
+      const id=String(threadID||''),body=typeof message==='string'?message.trim():'';if(!/^\d{1,40}$/.test(id))throw new Error('Invalid thread ID.');if(body.length>2000)throw new Error('Message is limited to 2000 characters.');
+      let temp='';const data=typeof options.imageData==='string'?options.imageData:'';
+      if(data){const match=data.match(/^data:(image\\/(?:jpeg|png|gif|webp));base64,([A-Za-z0-9+/=]+)$/);if(!match)throw new Error('Unsupported image format.');
+        const buf=Buffer.from(match[2],'base64');if(!buf.length||buf.length>5*1024*1024)throw new Error('Image must be 5 MB or smaller.');
+        const mime=match[1],valid=mime==='image/png'?buf.subarray(0,8).equals(Buffer.from([137,80,78,71,13,10,26,10])):mime==='image/jpeg'?buf[0]===255&&buf[1]===216&&buf[buf.length-1]===255&&buf[buf.length-2]===217:mime==='image/gif'?buf.subarray(0,3).toString()==='GIF':buf.subarray(0,4).toString()==='RIFF'&&buf.subarray(8,12).toString()==='WEBP';if(!valid)throw new Error('Image signature mismatch.');
+        const dir=path.join(config.dataDir,'messenger-uploads');await fs.mkdir(dir,{recursive:true,mode:0o700});temp=path.join(dir,require('node:crypto').randomUUID()+'.img');await fs.writeFile(temp,buf,{mode:0o600,flag:'wx'});
+      }
+      if(!body&&!temp)throw new Error('Write a message or attach an image.');if(typeof api.sendMessage!=='function')throw new Error('FCA sendMessage is unavailable.');
+      const payload=temp?{body,attachment:fs.createReadStream(temp),...(options.silent?{isSilent:true}:{})}:options.silent?{body,isSilent:true}:body;
+      try{const result=await callMessengerApi('sendMessage',[payload,id],30000);return{sent:true,silent:!!options.silent,hasImage:!!temp,result:result||null};}finally{if(temp)await fs.unlink(temp).catch(()=>{});}
     },
     async handleMessengerRequest(threadID, accept = true) {
       if (!api || status !== 'connected') throw new Error('Connect the account with a valid AppState first.');

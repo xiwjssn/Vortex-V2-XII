@@ -24,7 +24,7 @@ async function startDashboard({ config, logger, runtime }) {
     styleSrc: ["'self'", 'https://fonts.googleapis.com'],
     fontSrc: ["'self'", 'https://fonts.gstatic.com'], imgSrc: ["'self'", 'data:']
   } } }));
-  app.use(express.json({ limit: '256kb' }));
+  app.use(express.json({ limit: '8mb' }));
   const dashboardSessionStore = new FileSessionStore({ directory: path.join(config.dataDir, 'dashboard-sessions'), logger });
   app.use(session({
     store: dashboardSessionStore,
@@ -154,14 +154,33 @@ async function startDashboard({ config, logger, runtime }) {
         senderID: String(m.senderID || m.senderId || ''),
         body: String(m.body || m.message || '').slice(0, 3000),
         timestamp: Number(m.timestamp || m.timestampMs || 0) || null,
-        isUnsent: !!m.isUnsent
+        isUnsent: !!m.isUnsent,
+        attachments: (Array.isArray(m.attachments) ? m.attachments : []).slice(0, 8).map(a => {
+          const candidate = a.url || a.previewUrl || a.largePreviewUrl || a.thumbnailUrl || a.imageUrl || '';
+          let imageUrl = '';
+          try { const parsed = new URL(String(candidate)); if (parsed.protocol === 'https:') imageUrl = parsed.href; } catch {}
+          const kind = String(a.type || a.mimeType || a.mime_type || '').toLowerCase();
+          return { imageUrl: imageUrl && (!kind || /photo|image|image\\//.test(kind)) ? imageUrl : '';
+        }).filter(a => a.imageUrl)
       })) });
     } catch (e) { res.status(503).json({ error: String(e.message || e).slice(0, 220) }); }
   });
-  app.post('/api/messenger/threads/:id/messages', async (req, res) => {
-    const selected = messengerRuntime(req, res); if (!selected) return;
-    try { res.json(await selected.sendMessengerReply(req.params.id, req.body?.message)); }
-    catch (e) { res.status(503).json({ error: String(e.message || e).slice(0, 220) }); }
+  app.get('/api/messenger/threads/:id/info', async (req, res) => {
+    const selected=messengerRuntime(req,res);if(!selected)return;
+    try{res.json(await selected.getMessengerGroupInfo(req.params.id));}catch(e){res.status(503).json({error:String(e.message||e).slice(0,220)});}
+  });
+  app.post('/api/messenger/threads/:id/messages', async (req,res)=>{
+    const selected=messengerRuntime(req,res);if(!selected)return;
+    try{res.json(await selected.sendMessengerReply(req.params.id,req.body?.message,{silent:req.body?.silent===true,imageData:typeof req.body?.imageData==='string'?req.body.imageData:''}));}
+    catch(e){res.status(503).json({error:String(e.message||e).slice(0,220)});}
+  });
+  app.post('/api/messenger/threads/:id/members',async(req,res)=>{
+    const selected=messengerRuntime(req,res);if(!selected)return;
+    try{res.json(await selected.addMessengerMember(req.params.id,req.body?.userID));}catch(e){res.status(403).json({error:String(e.message||e).slice(0,220)});}
+  });
+  app.delete('/api/messenger/threads/:id/members/:userID',async(req,res)=>{
+    const selected=messengerRuntime(req,res);if(!selected)return;
+    try{res.json(await selected.removeMessengerMember(req.params.id,req.params.userID));}catch(e){res.status(403).json({error:String(e.message||e).slice(0,220)});}
   });
   app.post('/api/messenger/requests/:id', async (req, res) => {
     const selected = messengerRuntime(req, res); if (!selected) return;
