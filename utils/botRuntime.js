@@ -29,25 +29,6 @@ function createBotRuntime({ config, logger }) {
   let requiresSessionUpdate = false;
   let sessionHealth = 'unknown';
   let sessionMessage = 'Session status has not been verified yet.';
-  function facebookUserId(raw) {
-    let cookies;
-    try { cookies = validateAppState(raw); } catch { return ''; }
-    const cookie = cookies.find(item => String(item.key).toLowerCase() === 'c_user');
-    return cookie && cookie.value != null ? String(cookie.value).trim() : '';
-  }
-  async function assertUniqueFacebookSession(raw) {
-    const userId = facebookUserId(raw);
-    if (!userId || !Array.isArray(config.peerAppStateFiles)) return;
-    for (const peerFile of config.peerAppStateFiles) {
-      let peerRaw;
-      try { peerRaw = await fs.readFile(peerFile, 'utf8'); }
-      catch (error) { if (error.code === 'ENOENT') continue; throw error; }
-      const peerUserId = facebookUserId(peerRaw);
-      if (peerUserId && peerUserId === userId) {
-        throw new Error('This Facebook account is already assigned to the other VORTEX account panel. Use a different account AppState.');
-      }
-    }
-  }
   async function initializeAppStateRefreshManager() {
     if (appStateRefreshManager) return;
     appStateRefreshManager = new AppStateRefreshManager({
@@ -200,7 +181,6 @@ function createBotRuntime({ config, logger }) {
     },
     async saveAppState(raw, connect = false) {
       const parsed = validateAppState(raw);
-      await assertUniqueFacebookSession(parsed);
       const file = path.join(config.dataDir, 'appstate.json');
       await fs.mkdir(config.dataDir, { recursive: true, mode: 0o700 });
       await atomicWrite(file, JSON.stringify(parsed), 0o600);
@@ -239,7 +219,6 @@ function createBotRuntime({ config, logger }) {
           appState = validateAppState(raw);
           appStatePresent = true;
         }
-        await assertUniqueFacebookSession(appState);
         const mod = require('@dongdev/fca-unofficial');
         const login = typeof mod === 'function' ? mod : (mod.login || mod.default?.login || mod.default);
         if (typeof login !== 'function') throw new Error('Installed FCA package does not expose a supported login() API');
