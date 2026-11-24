@@ -4,20 +4,23 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const song = require('../cmds/song');
 
-test('music aliases are prefix-bound and parse Arabic/English queries', () => {
-  assert.equal(song._test.parseQuery('*song saquarema'), 'saquarema');
-  assert.equal(song._test.parseQuery('*music free jazz'), 'free jazz');
-  assert.equal(song._test.parseQuery('*اغنية mc mego نيران صديقة'), 'mc mego نيران صديقة');
-  assert.equal(song._test.parseQuery('!موسيقى ambient', '!'), 'ambient');
-  assert.equal(song._test.parseQuery('موسيقى ambient'), '');
-  assert.equal(song._test.parseQuery('*song'), '');
+test('prefix-bound music aliases', () => {
+  assert.equal(song._test.parseQuery('*موسيقى اسم', '*'), 'اسم');
+  assert.equal(song._test.parseQuery('!music ambient', '!'), 'ambient');
+  assert.equal(song._test.parseQuery('موسيقى اسم', '*'), '');
 });
 
-test('accepts YouTube and SoundCloud results and rejects unsupported domains', () => {
-  const yt = { title: 'YouTube audio', webpage_url: 'https://www.youtube.com/watch?v=abc', duration: 120 };
-  const sc = { title: 'SoundCloud audio', webpage_url: 'https://soundcloud.com/artist/track', duration: 120 };
-  assert.equal(song._test.parseSearchResult({ entries: [yt] }).title, 'YouTube audio');
-  assert.equal(song._test.parseSearchResult({ entries: [sc] }).title, 'SoundCloud audio');
-  assert.throws(() => song._test.parseSearchResult({ entries: [{ ...yt, duration: 800 }] }), /12 دقيقة/);
-  assert.throws(() => song._test.parseSearchResult({ entries: [{ ...yt, webpage_url: 'https://example.com/' }] }), /مصدر غير مدعوم/);
+test('normalizes the external search API response and rejects invalid results', () => {
+  const item = { title: 'Song', url: 'https://www.youtube.com/watch?v=abc', channelName: 'Artist', duration: 90 };
+  assert.equal(song._test.normalizeSearchData([item]).title, 'Song');
+  assert.throws(() => song._test.normalizeSearchData([]), /لم أجد/);
+  assert.throws(() => song._test.normalizeSearchData([{ ...item, url: 'https://example.com/' }]), /YouTube/);
+  assert.throws(() => song._test.normalizeSearchData([{ ...item, duration: 900 }]), /12 دقيقة/);
+});
+
+test('rejects unsafe audio URLs', () => {
+  assert.equal(song._test.validatePublicHttpsUrl('https://cdn.example.org/song.mp3').protocol, 'https:');
+  assert.throws(() => song._test.validatePublicHttpsUrl('http://cdn.example.org/song.mp3'), /غير آمن/);
+  assert.throws(() => song._test.validatePublicHttpsUrl('https://localhost/song.mp3'), /غير عام/);
+  assert.throws(() => song._test.validatePublicHttpsUrl('https://127.0.0.1/song.mp3'), /محلي/);
 });
