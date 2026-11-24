@@ -74,15 +74,11 @@ async function startDashboard({ config, logger, runtime, accounts = {} }) {
 
   app.get('/health', (req, res) => {
     const primary = runtime.getState();
-    const secondary = accounts.secondary?.getState?.() || null;
     res.json({
       status: 'ok',
       bot: 'VORTEX',
-      botConnected: !!(primary.connected || secondary?.connected),
-      accounts: {
-        primary: { configured: !!primary.appStateConfigured, connected: !!primary.connected, sessionHealth: primary.sessionHealth },
-        secondary: secondary ? { configured: !!secondary.appStateConfigured, connected: !!secondary.connected, sessionHealth: secondary.sessionHealth } : null
-      }
+      botConnected: !!primary.connected,
+      accounts: { primary: { configured: !!primary.appStateConfigured, connected: !!primary.connected, sessionHealth: primary.sessionHealth } }
     });
   });
   app.get('/login', (req, res) => res.sendFile(path.join(__dirname, 'public', 'login.html')));
@@ -124,63 +120,15 @@ async function startDashboard({ config, logger, runtime, accounts = {} }) {
     if (readOnly) return next();
     return res.status(403).json({ error: 'Owner access required' });
   });
-  // Account 2 has an isolated runtime and data directory; secrets are never returned.
-  const secondaryRuntime = accounts.secondary;
-  app.get('/api/accounts/2/status', (req, res) => {
-    if (!secondaryRuntime) return res.status(503).json({ error: 'Second account is not configured' });
-    res.json(secondaryRuntime.getState());
-  });
-  app.post('/api/accounts/2/appstate/validate', (req, res) => {
-    if (!secondaryRuntime) return res.status(503).json({ error: 'Second account is not configured' });
-    try { validateAppState(req.body?.appState); res.json({ valid: true }); }
-    catch (e) { res.status(400).json({ valid: false, error: e.message }); }
-  });
-  app.post('/api/accounts/2/appstate/save', async (req, res) => {
-    if (!secondaryRuntime) return res.status(503).json({ error: 'Second account is not configured' });
-    try { validateAppState(req.body?.appState); res.json(await secondaryRuntime.saveAppState(req.body.appState, false)); }
-    catch (e) { res.status(400).json({ error: e.message }); }
-  });
-  app.post('/api/accounts/2/appstate/connect', async (req, res) => {
-    if (!secondaryRuntime) return res.status(503).json({ error: 'Second account is not configured' });
-    try {
-      validateAppState(req.body?.appState);
-      await secondaryRuntime.saveAppState(req.body.appState, false);
-      res.json(await secondaryRuntime.connect());
-    } catch (e) { res.status(503).json({ error: String(e.message || e).slice(0, 240) }); }
-  });
-  app.delete('/api/accounts/2/appstate/session', async (req, res) => {
-    if (!secondaryRuntime) return res.status(503).json({ error: 'Second account is not configured' });
-    try { res.json(await secondaryRuntime.clearAppStateSession()); }
-    catch (e) { logger.error('SECONDARY_SESSION_REMOVE_FAILED', { error: String(e.message || e).slice(0, 180) }); res.status(500).json({ error: 'Could not remove the second session completely.' }); }
-  });
-  app.post('/api/accounts/2/connection/connect', async (req, res) => {
-    if (!secondaryRuntime) return res.status(503).json({ error: 'Second account is not configured' });
-    try { res.json(await secondaryRuntime.connect()); }
-    catch (e) { res.status(503).json({ error: e.message }); }
-  });
-  app.post('/api/accounts/2/connection/reconnect', async (req, res) => {
-    if (!secondaryRuntime) return res.status(503).json({ error: 'Second account is not configured' });
-    try { await secondaryRuntime.disconnect(); res.json(await secondaryRuntime.connect()); }
-    catch (e) { res.status(503).json({ error: e.message }); }
-  });
-  app.post('/api/accounts/2/connection/disconnect', async (req, res) => {
-    if (!secondaryRuntime) return res.status(503).json({ error: 'Second account is not configured' });
-    res.json(await secondaryRuntime.disconnect());
-  });
-
   function messengerRuntime(req, res) {
-    const selected = req.query.account === '2' ? secondaryRuntime : runtime;
-    if (!selected) { res.status(503).json({ error: 'Selected account is not configured.' }); return null; }
-    const state = selected.getState();
-    if (!state.appStateConfigured) { res.status(403).json({ error: 'Link this account’s AppState/cookies first to unlock Messenger.' }); return null; }
-    if (!state.connected) { res.status(409).json({ error: 'The linked account is offline. Connect it before opening Messenger.' }); return null; }
-    return selected;
+    const state = runtime.getState();
+    if (!state.appStateConfigured) { res.status(403).json({ error: 'Link the primary account AppState/cookies first to unlock Messenger.' }); return null; }
+    if (!state.connected) { res.status(409).json({ error: 'The primary account is offline. Connect it before opening Messenger.' }); return null; }
+    return runtime;
   }
   app.get('/api/messenger/status', (req, res) => {
-    const selected = req.query.account === '2' ? secondaryRuntime : runtime;
-    if (!selected) return res.json({ configured: false, connected: false, account: req.query.account === '2' ? '2' : '1' });
-    const state = selected.getState();
-    res.json({ configured: !!state.appStateConfigured, connected: !!state.connected, account: req.query.account === '2' ? '2' : '1' });
+    const state = runtime.getState();
+    res.json({ configured: !!state.appStateConfigured, connected: !!state.connected, account: '1' });
   });
   app.get('/api/messenger/threads', async (req, res) => {
     const selected = messengerRuntime(req, res); if (!selected) return;
@@ -400,7 +348,6 @@ async function startDashboard({ config, logger, runtime, accounts = {} }) {
     const settings = { botName: c.botName, prefix: c.prefix, language: c.language, ownerIDs: c.ownerIDs || (c.ownerID ? [c.ownerID] : []), adminIDs: c.adminIDs };
     const file = path.join(c.dataDir, 'settings.json');
     await atomicWrite(file, JSON.stringify(settings, null, 2), 0o600);
-    if (accounts.secondaryConfig) Object.assign(accounts.secondaryConfig, { ...settings, ownerIDs: [...settings.ownerIDs], adminIDs: [...settings.adminIDs] });
   }
 }
 module.exports = { startDashboard };
