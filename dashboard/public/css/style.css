@@ -31,3 +31,5 @@
   .messenger-image-preview{flex-wrap:wrap}
   .messenger-image-preview img{width:76px;height:76px;object-fit:contain;background:#080b12}
 }
+
+.messenger-send-picture{padding:8px 13px;border-radius:11px;font-size:12px;font-weight:800}.messenger-send-picture[hidden]{display:none!important}
