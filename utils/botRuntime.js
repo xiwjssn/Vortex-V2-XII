@@ -8,6 +8,7 @@ const { AppStateRefreshManager } = require('./appStateRefresh');
 const { createHumanWriter } = require('./humanWriter');
 const { isAuthorizedSender } = require('./accessControl');
 const { isSessionAuthError } = require('./sessionErrors');
+const { validateMessengerThreadID, sendMessengerPayload } = require('./messengerSend');
 
 function createBotRuntime({ config, logger }) {
   const cmdsDir = path.join(__dirname, '..', 'cmds');
@@ -498,8 +499,7 @@ function createBotRuntime({ config, logger }) {
     },
     async sendMessengerReply(threadID, message, options = {}) {
       if (!api || status !== 'connected') throw new Error('Connect the account with a valid AppState first.');
-      const targetID = String(threadID);
-      if (!/^\\d{1,40}$/.test(targetID)) throw new Error('Invalid thread ID.');
+      const targetID = validateMessengerThreadID(threadID);
       if (typeof message !== 'string' || message.length > 2000) throw new Error('Message must be 2000 characters or fewer.');
       const body = message.trim();
       const imageData = typeof options.imageData === 'string' ? options.imageData : '';
@@ -522,19 +522,12 @@ function createBotRuntime({ config, logger }) {
         throw new Error('اكتب رسالة أو اختر صورة لإرسالها.');
       }
       if (options.silent === true && payload && typeof payload === 'object') payload.isSilent = true;
-      return new Promise((resolve, reject) => {
-        let done = false;
-        const timer = setTimeout(() => finish(new Error('انتهت مهلة إرسال Messenger. لم يصل تأكيد من FCA.')), 45000);
-        async function finish(error, value) {
-          if (done) return; done = true; clearTimeout(timer);
-          if (attachmentPath) { try { await fs.unlink(attachmentPath); } catch {} }
-          error ? reject(new Error(String(error.message || error).slice(0, 220))) : resolve({ sent: true, result: value || null });
-        }
-        try {
-          const result = api.sendMessage(payload, targetID, finish);
-          if (result && typeof result.then === 'function') result.then(value => finish(null, value), finish);
-        } catch (error) { finish(error); }
-      });
+      try {
+        const result = await sendMessengerPayload(api, payload, targetID, 45000);
+        return { sent: true, result: result || null };
+      } finally {
+        if (attachmentPath) { try { await fs.unlink(attachmentPath); } catch {} }
+      }
     },
     async getMessengerGroupInfo(threadID) {
       if(!api||status!=='connected')throw new Error('Connect the account with a valid AppState first.');
