@@ -546,7 +546,7 @@ function createBotRuntime({ config, logger }) {
       if(data){const match=data.match(/^data:(image\/(?:jpeg|png|gif|webp));base64,([A-Za-z0-9+/=]+)$/);if(!match)throw new Error('Unsupported image format.');
         const buf=Buffer.from(match[2],'base64');if(!buf.length||buf.length>5*1024*1024)throw new Error('Image must be 5 MB or smaller.');
         const mime=match[1],valid=mime==='image/png'?buf.subarray(0,8).equals(Buffer.from([137,80,78,71,13,10,26,10])):mime==='image/jpeg'?buf[0]===255&&buf[1]===216&&buf[buf.length-1]===255&&buf[buf.length-2]===217:mime==='image/gif'?buf.subarray(0,3).toString()==='GIF':buf.subarray(0,4).toString()==='RIFF'&&buf.subarray(8,12).toString()==='WEBP';if(!valid)throw new Error('Image signature mismatch.');
-        const dir=path.join(config.dataDir,'messenger-uploads');await fs.mkdir(dir,{recursive:true,mode:0o700});temp=path.join(dir,require('node:crypto').randomUUID()+'.img');await fs.writeFile(temp,buf,{mode:0o600,flag:'wx'});
+        const dir=path.join(config.dataDir,'messenger-uploads');await fs.mkdir(dir,{recursive:true,mode:0o700});const extension={ 'image/jpeg':'.jpg','image/png':'.png','image/gif':'.gif','image/webp':'.webp' }[mime];temp=path.join(dir,require('node:crypto').randomUUID()+extension);await fs.writeFile(temp,buf,{mode:0o600,flag:'wx'});
       }
       if(!body&&!temp)throw new Error('Write a message or attach an image.');if(typeof api.sendMessage!=='function')throw new Error('FCA sendMessage is unavailable.');
       const payload=temp?{body,attachment:fs.createReadStream(temp),...(options.silent?{isSilent:true}:{})}:options.silent?{body,isSilent:true}:body;
