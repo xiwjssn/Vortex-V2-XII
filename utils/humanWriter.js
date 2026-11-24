@@ -85,10 +85,10 @@ function createHumanWriter({ logger = console, onSafetyStop = () => {}, ...optio
   function brandMessage(message) {
     const signature = '🌀 ⟡ 𝐕𝐎𝐑𝐓𝐄𝐗';
     if (typeof message === 'string') {
-      return message.startsWith(signature) ? message : signature + '\\n' + message;
+      return message.startsWith(signature) ? message : signature + '\n' + message;
     }
     if (message && typeof message === 'object' && typeof message.body === 'string') {
-      return { ...message, body: message.body.startsWith(signature) ? message.body : signature + '\\n' + message.body };
+      return { ...message, body: message.body.startsWith(signature) ? message.body : signature + '\n' + message.body };
     }
     return message;
   }
