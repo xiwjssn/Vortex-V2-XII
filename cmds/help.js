@@ -2,7 +2,7 @@
 
 const ICONS = {
   help: '📚', info: '🪪', ping: '⚡', uid: '🆔', uptime: '⏳',
-  admin: '🛡️', groups: '🗂️', kick: '🚪', reload: '♻️', song: '🎵',
+  admin: '🛡️', groups: '🗂️', kick: '🚪', reload: '♻️',
   avatar: '🖼️', nm: '🏷️', vortex: '🌀', حذف: '🗑️'
 };
 
