@@ -506,7 +506,7 @@ function createBotRuntime({ config, logger }) {
       let attachmentPath = null;
       let payload = body;
       if (imageData) {
-        const match = imageData.match(/^data:(image\\/(?:jpeg|png|gif|webp));base64,([A-Za-z0-9+/=]+)$/);
+        const match = imageData.match(/^data:(image\/(?:jpeg|png|gif|webp));base64,([A-Za-z0-9+/=]+)$/);
         if (!match) throw new Error('صيغة الصورة غير صالحة. أعد اختيار الصورة.');
         const mime = match[1].toLowerCase();
         const buffer = Buffer.from(match[2], 'base64');
