@@ -26,15 +26,19 @@ function isCreativeCommonsTrack(track) {
 async function callSendMessage(api, message, event) {
   return new Promise((resolve, reject) => {
     let settled = false;
-    const done = error => {
+    const timer = setTimeout(() => done(new Error('Messenger audio send timed out.')), 40000);
+    function done(error) {
       if (settled) return;
       settled = true;
+      clearTimeout(timer);
       error ? reject(error) : resolve();
-    };
+    }
     try {
-      const result = api.sendMessage(message, event.threadID, event.messageID, done);
-      if (result && typeof result.then === 'function') result.then(() => done(), done);
-      else if (result !== undefined && api.sendMessage.length < 4) done();
+      // FCA's sendMessage is callback-based. The runtime safety proxy returns a
+      // promise when the call is queued, not when Messenger confirms delivery;
+      // therefore wait for FCA's callback instead of treating that promise as
+      // proof that the attachment was sent.
+      api.sendMessage(message, event.threadID, event.messageID, done);
     } catch (error) { done(error); }
   });
 }
@@ -79,7 +83,7 @@ module.exports = {
   name: 'song',
   aliases: ['اغنية', 'أغنية', 'موسيقى'],
   description: 'البحث عن مقاطع مرخّصة Creative Commons وإرسالها كملف صوتي',
-  _test: { parseQuery, isCreativeCommonsTrack, searchJamendo, downloadAudio },
+  _test: { parseQuery, isCreativeCommonsTrack, searchJamendo, downloadAudio, callSendMessage, MAX_AUDIO_BYTES },
   async execute(api, event) {
     const query = parseQuery(event?.body, event?.config?.prefix || '*');
     if (!query) {
