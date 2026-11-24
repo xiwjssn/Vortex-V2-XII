@@ -10,7 +10,7 @@ const { validateConfig } = require('../utils/config');
 const roleLists = require('../utils/roleLists');
 const { FileSessionStore } = require('../utils/sessionStore');
 
-async function startDashboard({ config, logger, runtime, accounts = {} }) {
+async function startDashboard({ config, logger, runtime }) {
   if (!config.sessionSecret || config.sessionSecret.length < 32) {
     throw new Error('Session secret is not configured correctly.');
   }
