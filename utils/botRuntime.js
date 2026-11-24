@@ -496,19 +496,42 @@ function createBotRuntime({ config, logger }) {
         } catch (error) { finish(error); }
       });
     },
-    async sendMessengerReply(threadID, message) {
+    async sendMessengerReply(threadID, message, options = {}) {
       if (!api || status !== 'connected') throw new Error('Connect the account with a valid AppState first.');
-      if (!/^\d{1,40}$/.test(String(threadID))) throw new Error('Invalid thread ID.');
-      if (typeof message !== 'string' || !message.trim() || message.length > 2000) throw new Error('Message must contain 1–2000 characters.');
-      if (typeof api.sendMessage !== 'function') throw new Error('This FCA version does not support sending Messenger replies.');
+      const targetID = String(threadID);
+      if (!/^\\d{1,40}$/.test(targetID)) throw new Error('Invalid thread ID.');
+      if (typeof message !== 'string' || message.length > 2000) throw new Error('Message must be 2000 characters or fewer.');
+      const body = message.trim();
+      const imageData = typeof options.imageData === 'string' ? options.imageData : '';
+      let attachmentPath = null;
+      let payload = body;
+      if (imageData) {
+        const match = imageData.match(/^data:(image\\/(?:jpeg|png|gif|webp));base64,([A-Za-z0-9+/=]+)$/);
+        if (!match) throw new Error('صيغة الصورة غير صالحة. أعد اختيار الصورة.');
+        const mime = match[1].toLowerCase();
+        const buffer = Buffer.from(match[2], 'base64');
+        if (!buffer.length || buffer.length > 5 * 1024 * 1024) throw new Error('حجم الصورة يجب ألا يتجاوز 5 MB.');
+        const extension = { 'image/jpeg': '.jpg', 'image/png': '.png', 'image/gif': '.gif', 'image/webp': '.webp' }[mime];
+        const dir = path.join(config.dataDir, 'messenger-uploads');
+        await fs.mkdir(dir, { recursive: true, mode: 0o700 });
+        attachmentPath = path.join(dir, require('node:crypto').randomUUID() + extension);
+        await fs.writeFile(attachmentPath, buffer, { mode: 0o600, flag: 'wx' });
+        payload = { attachment: require('node:fs').createReadStream(attachmentPath) };
+        if (body) payload.body = body;
+      } else if (!body) {
+        throw new Error('اكتب رسالة أو اختر صورة لإرسالها.');
+      }
+      if (options.silent === true && payload && typeof payload === 'object') payload.isSilent = true;
       return new Promise((resolve, reject) => {
-        let done = false; const timer = setTimeout(() => finish(new Error('Message send timed out.')), 15000);
-        function finish(error, value) {
+        let done = false;
+        const timer = setTimeout(() => finish(new Error('انتهت مهلة إرسال Messenger. لم يصل تأكيد من FCA.')), 45000);
+        async function finish(error, value) {
           if (done) return; done = true; clearTimeout(timer);
+          if (attachmentPath) { try { await fs.unlink(attachmentPath); } catch {} }
           error ? reject(new Error(String(error.message || error).slice(0, 220))) : resolve({ sent: true, result: value || null });
         }
         try {
-          const result = api.sendMessage(message.trim(), String(threadID), finish);
+          const result = api.sendMessage(payload, targetID, finish);
           if (result && typeof result.then === 'function') result.then(value => finish(null, value), finish);
         } catch (error) { finish(error); }
       });
