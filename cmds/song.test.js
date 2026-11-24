@@ -3,35 +3,30 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const song = require('./song');
-const { parseQuery, isCreativeCommonsTrack, callSendMessage, MAX_AUDIO_BYTES } = song._test;
+const { parseQuery, parseSearchResult, callSendMessage, MAX_AUDIO_BYTES, MAX_DURATION_SECONDS } = song._test;
 
-test('music alias is parsed only after the configured prefix', () => {
+test('music command aliases are parsed only after the configured prefix', () => {
   assert.equal(parseQuery('*موسيقى نغمة هادئة', '*'), 'نغمة هادئة');
-  assert.equal(parseQuery('!موسيقى track name', '!'), 'track name');
+  assert.equal(parseQuery('!music track name', '!'), 'track name');
+  assert.equal(parseQuery('*song ambient', '*'), 'ambient');
   assert.equal(parseQuery('*اغنية اسم', '*'), 'اسم');
   assert.equal(parseQuery('موسيقى اسم', '*'), '');
-});
-
-test('parses aliases and escapes a custom regex-special prefix', () => {
-  assert.equal(parseQuery('.music ambient', '.'), 'ambient');
-  assert.equal(parseQuery('+song ambient', '+'), 'ambient');
   assert.equal(parseQuery('*موسيقى', '*'), '');
 });
 
-test('accepts only secure audio URLs with a Creative Commons license URL', () => {
-  assert.equal(isCreativeCommonsTrack({
-    audiodownload: 'https://cdn.example/audio.mp3',
-    license_ccurl: 'https://creativecommons.org/licenses/by/4.0/'
-  }), true);
-  assert.equal(isCreativeCommonsTrack({
-    audiodownload: 'http://cdn.example/audio.mp3',
-    license_ccurl: 'https://creativecommons.org/licenses/by/4.0/'
-  }), false);
-  assert.equal(isCreativeCommonsTrack({
-    audiodownload: 'https://cdn.example/audio.mp3',
-    license_ccurl: 'https://example.com/license'
-  }), false);
+test('parses custom regex-special prefixes safely', () => {
+  assert.equal(parseQuery('.music ambient', '.'), 'ambient');
+  assert.equal(parseQuery('+song ambient', '+'), 'ambient');
+});
+
+test('selects first search result and rejects invalid, long or non-YouTube results', () => {
+  const valid = { title: 'Track', webpage_url: 'https://www.youtube.com/watch?v=abc', duration: 180 };
+  assert.equal(parseSearchResult({ entries: [valid] }).title, 'Track');
+  assert.throws(() => parseSearchResult({ entries: [] }), /لم أجد/);
+  assert.throws(() => parseSearchResult({ ...valid, duration: 800 }), /12 دقيقة/);
+  assert.throws(() => parseSearchResult({ ...valid, webpage_url: 'https://example.com/file' }), /YouTube/);
   assert.equal(MAX_AUDIO_BYTES, 15 * 1024 * 1024);
+  assert.equal(MAX_DURATION_SECONDS, 720);
 });
 
 test('waits for FCA callback before confirming audio delivery', async () => {
@@ -45,24 +40,18 @@ test('waits for FCA callback before confirming audio delivery', async () => {
         callbackCalled = true;
         callback(null, { messageID: 'sent-1' });
       }, 10);
-      // Simulate the safety wrapper promise resolving immediately after queueing.
       return Promise.resolve({ queued: true });
     }
   };
-  await callSendMessage(api, { body: 'audio', attachment: {} }, {
-    threadID: '123', messageID: 'reply-1'
-  });
+  await callSendMessage(api, { body: 'audio', attachment: {} }, { threadID: '123', messageID: 'reply-1' });
   assert.equal(callbackCalled, true);
 });
 
-test('propagates Messenger callback errors for the audio attachment', async () => {
+test('propagates Messenger callback errors for audio attachment', async () => {
   const api = {
     sendMessage(_message, _threadID, _messageID, callback) {
       setImmediate(() => callback(new Error('attachment rejected')));
     }
   };
-  await assert.rejects(
-    callSendMessage(api, { body: 'audio', attachment: {} }, { threadID: '123' }),
-    /attachment rejected/
-  );
+  await assert.rejects(callSendMessage(api, { body: 'audio', attachment: {} }, { threadID: '123' }), /attachment rejected/);
 });
