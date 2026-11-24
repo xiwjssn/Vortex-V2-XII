@@ -517,13 +517,16 @@ function createBotRuntime({ config, logger }) {
       if(!api||status!=='connected')throw new Error('Connect the account with a valid AppState first.');
       const id=String(threadID||'');if(!/^\d{1,40}$/.test(id))throw new Error('Invalid thread ID.');
       const info=await callMessengerApi('getThreadInfo',[id]);
-      const participants=Array.isArray(info.participantIDs)?info.participantIDs.map(String).slice(0,1000):[];
-      const admins=Array.isArray(info.adminIDs)?info.adminIDs.map(String):[];
+      const normalizeID=value=>{if(value==null)return'';if(typeof value==='object')return String(value.id||value.userID||value.uid||value.actorID||value.user_id||'');return String(value);};
+      const participantsSource=Array.isArray(info.participantIDs)?info.participantIDs:Object.keys(info.participantIDs||{});
+      const participants=[...new Set(participantsSource.map(normalizeID).filter(uid=>/^[0-9]{1,40}$/.test(uid)))].slice(0,1000);
+      const adminSource=Array.isArray(info.adminIDs)?info.adminIDs:(info.adminIDs&&typeof info.adminIDs==='object'?Object.entries(info.adminIDs).flatMap(([key,value])=>value===true?key:(normalizeID(value)||key)):[]);
+      const admins=[...new Set(adminSource.map(normalizeID).filter(uid=>/^[0-9]{1,40}$/.test(uid)))];
       let botID='';try{botID=String(await callMessengerApi('getCurrentUserID',[]));}catch{}
-      const raw=Array.isArray(info.userInfo)?info.userInfo:Object.values(info.userInfo||{});
-      const names=new Map(raw.map(u=>[String(u.id||u.userID||u.uid||''),String(u.name||u.fullName||u.firstName||u.displayName||'')]).filter(([id])=>id));
-      if(participants.some(id=>!names.has(id))&&typeof api.getUserInfo==='function'){try{const more=await callMessengerApi('getUserInfo',[participants]);for(const u of(Array.isArray(more)?more:Object.values(more||{}))){const id=String(u.id||u.userID||u.uid||''),name=String(u.name||u.fullName||u.firstName||u.displayName||'');if(id&&name)names.set(id,name);}}catch{}}
-      return{threadID:id,threadName:String(info.threadName||''),isGroup:!!info.isGroup||participants.length>2,botID,isBotAdmin:!!botID&&admins.includes(botID),admins:participants.filter(id=>admins.includes(id)).map(id=>({id,name:names.get(id)||''})),members:participants.filter(id=>!admins.includes(id)).map(id=>({id,name:names.get(id)||''})),participantCount:participants.length};
+      const raw=Array.isArray(info.userInfo)?info.userInfo:Object.entries(info.userInfo||{}).map(([key,value])=>({id:key,...value}));
+      const names=new Map(raw.map(u=>[normalizeID(u),String(u.name||u.fullName||u.firstName||u.displayName||'')]).filter(([uid])=>uid));
+      if(participants.some(uid=>!names.has(uid))&&typeof api.getUserInfo==='function'){try{const more=await callMessengerApi('getUserInfo',[participants]);for(const u of(Array.isArray(more)?more:Object.values(more||{}))){const uid=normalizeID(u),name=String(u.name||u.fullName||u.firstName||u.displayName||'');if(uid&&name)names.set(uid,name);}}catch{}}
+      return{threadID:id,threadName:String(info.threadName||''),isGroup:!!info.isGroup||participants.length>2,botID,isBotAdmin:!!botID&&admins.includes(botID),admins:participants.filter(uid=>admins.includes(uid)).map(uid=>({id:uid,name:names.get(uid)||''})),members:participants.filter(uid=>!admins.includes(uid)).map(uid=>({id:uid,name:names.get(uid)||''})),participantCount:participants.length};
     },
     async addMessengerMember(threadID,userID){
       const id=String(threadID||''),uid=String(userID||'').trim();if(!/^\d{1,40}$/.test(id)||!/^\d{1,40}$/.test(uid))throw new Error('Enter a valid numeric Messenger user ID.');
